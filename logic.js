@@ -23,6 +23,18 @@ export const BAN_CHOICES = [
   { label: "1 天", days: 1 }, { label: "7 天", days: 7 }, { label: "30 天", days: 30 }, { label: "永久", days: "forever" },
 ];
 
+/* ── 驗證器的條碼 ──────────────────────────────────────────────────
+   GoTrue 的 /factors 回的 totp.qr_code 是**一段 SVG 原始碼**,不是網址 —— 官方套件(auth-js GoTrueClient 的 enroll)
+   會自己在前面補 `data:image/svg+xml;utf-8,`;我們沒載套件,少了這一步 <img> 就是破圖(09-28 他第一次綁就撞到)。
+   這裡把它變成網址,而且整段 encodeURIComponent(原始碼裡有 # 的話,沒編碼會被當成網址的片段切掉)。
+   已經是 data: 的原樣回(哪天 GoTrue 改成直接給網址也不會壞)。 */
+export function qrDataUrl(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  if (/^data:/i.test(s)) return s;
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(s);
+}
+
 /* ── 時間 ──────────────────────────────────────────────────────────── */
 const TZ = "Asia/Taipei";
 const parts = (iso) => {

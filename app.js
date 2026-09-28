@@ -11,7 +11,7 @@ import { SUPABASE_URL, PUBLISHABLE_KEY } from "./config.js";
 import * as Auth from "./auth.js";
 import {
   reasonText, KIND, BAN_CHOICES, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
-  growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, matchFiles,
+  growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, matchFiles, qrDataUrl,
 } from "./logic.js";
 
 /* 被嵌進別人的頁面就什麼都不畫:點擊劫持(把按鈕疊在一個看起來無害的頁面底下騙你按)。
@@ -110,7 +110,7 @@ async function toMfa() {
     if (ok) { S.factor = ok.id; S.enroll = null; }
     else {
       const e = await Auth.enroll();
-      S.factor = e.id; S.enroll = { qr: e?.totp?.qr_code ?? null, secret: e?.totp?.secret ?? "" };
+      S.factor = e.id; S.enroll = { qr: qrDataUrl(e?.totp?.qr_code), secret: e?.totp?.secret ?? "" };
     }
     S.auth = "mfa"; S.loginErr = null;
   } catch (e) {
