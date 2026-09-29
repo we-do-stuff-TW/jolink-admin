@@ -22,6 +22,11 @@ export const KIND = { message: "訊息", user: "這個人" };
 export const BAN_CHOICES = [
   { label: "1 天", days: 1 }, { label: "7 天", days: 7 }, { label: "30 天", days: 30 }, { label: "永久", days: "forever" },
 ];
+/** 停權改短的確認句(第二十一次健檢卡 3)。資料庫(0163 admin_ban)擋下「這樣會提早放人」之後,停權框多一行問這句。
+ *  current:對方現在停到哪 —— ISO 時間,或 "forever"(永久;沒有期限那一列)。label:這次選的那一格(「7 天」)。
+ *  ⚠️ 「算不算改短」只住資料庫那一支;這裡只負責把它講成人話(不自己判斷,判斷寫兩份就會漂)。 */
+export const shortenText = (current, label) =>
+  `現在${current == null || current === "forever" ? "是永久停權" : "停到 " + mdhm(current)}，改成停 ${label}會提早放人。`;
 
 /* ── 驗證器的條碼 ──────────────────────────────────────────────────
    GoTrue 的 /factors 回的 totp.qr_code 是**一段 SVG 原始碼**,不是網址 —— 官方套件(auth-js GoTrueClient 的 enroll)
@@ -89,6 +94,16 @@ export function bellItems(b) {
   }
   if (n(b.cron_failed_24h) > 0) {
     out.push({ dot: "red", text: `排程失敗 ${b.cron_failed_24h} 次`, sub: "24 小時內", go: { view: "system" } });
+  }
+  /* 0164(第二十一次健檢卡 5):背景工作被擋／沒送出去、巡邏停了。暗號對不上那天,寄警報信的那支也被擋 ——
+     後台(用 Google 登入,不靠那把暗號)是唯一還醒著的窗口。哪幾種算大事由資料庫與 netalarm.ts 決定,這裡只畫。 */
+  if (n(b.net_blocked_24h) > 0) {
+    const labels = Array.isArray(b.net_blocked_labels) ? b.net_blocked_labels : [];
+    out.push({ dot: "red", text: `背景工作被擋 ${b.net_blocked_24h} 發`, sub: labels.length ? `${labels.join("、")} · 24 小時內` : "24 小時內",
+      go: { view: "system" } });
+  }
+  if (b.patrol_stale === true) {
+    out.push({ dot: "red", text: "巡邏停了", sub: b.patrol_scanned_at ? `上次 ${mdhm(b.patrol_scanned_at)}` : "還沒跑過", go: { view: "system" } });
   }
   if (n(b.not_updated) > 0 && b.latest_build != null) {
     out.push({ dot: "manual", text: `${b.not_updated} 人還沒更新到 build ${b.latest_build}`,

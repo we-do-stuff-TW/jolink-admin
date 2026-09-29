@@ -12,7 +12,7 @@
 import { SUPABASE_URL, PUBLISHABLE_KEY } from "./config.js";
 import * as Auth from "./auth.js";
 import {
-  reasonText, KIND, BAN_CHOICES, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
+  reasonText, KIND, BAN_CHOICES, shortenText, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
   growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, matchFiles, qrDataUrl,
   regCounts, waveSeries, niceScale, monotonePath,
 } from "./logic.js";
@@ -23,12 +23,14 @@ const FRAMED = window.top !== window.self;
 
 const root = document.getElementById("root");
 class Stop extends Error {}
+/* 0163:對已經停權中的人按了會提早放人的期限 → admin 函式回 409 would_shorten ＋ 現在停到哪(第二十一次健檢卡 3)。 */
+class Shorten extends Error { constructor(current) { super("would_shorten"); this.current = current; } }
 
 /* ══ 狀態 ══ */
 const S = {
   auth: "boot", loginErr: null, factor: null, enroll: null, me: null,
   view: "overview", bell: false, asof: null,
-  rtab: "open", sel: null, rdetail: false, fog: true, ask: null, days: null, busy: false,
+  rtab: "open", sel: null, rdetail: false, fog: true, ask: null, days: null, busy: false, shorten: null, banNote: "",
   q: "", pf: "all", drawer: null,
   done: {}, err: {}, actErr: null,
 };
@@ -89,6 +91,7 @@ async function api(op, extra = {}) {
   if (r.status === 403 && (data?.error === "no_token" || data?.error === "bad_token")) { Auth.clear(); S.auth = "login"; render(); throw new Stop(); }
   if (r.status === 403 && data?.error === "need_aal2") { await toMfa(); throw new Stop(); }
   if (r.status === 403 && data?.error === "not_admin") { S.auth = "notadmin"; render(); throw new Stop(); }
+  if (r.status === 409 && data?.error === "would_shorten") throw new Shorten(data.current ?? null);
   if (!r.ok) throw new Error(errText(data, r.status));
   return data;
 }
@@ -522,7 +525,7 @@ function detailPane() {
     return pane;
   }
   const acts = el("div", "acts");
-  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.actErr = null; render(); }; return b; };
+  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.shorten = null; S.banNote = ""; S.actErr = null; render(); }; return b; };
   put(acts, mk("看過了", "solid", "handle"), mk("停權", "danger", "ban"),
     r.target_type === "message" && r.message_live ? mk("把這則拿掉", "line", "remove") : null);
   pane.append(acts);
@@ -599,17 +602,38 @@ function askBox(key, r) {
     const check = () => { g.disabled = S.days == null || !note.value.trim(); };
     const chips = BAN_CHOICES.map((c) => {
       const b = el("button", "chipbtn", c.label); b.dataset.k = "day-" + c.days; b.setAttribute("aria-pressed", String(S.days === c.days));
-      b.onclick = () => { S.days = c.days; chips.forEach((x, i) => x.setAttribute("aria-pressed", String(BAN_CHOICES[i].days === c.days))); check(); };
+      /* 換了天數,剛才那一句「會提早放人」就不算數了(它講的是上一個選擇) */
+      b.onclick = () => { S.days = c.days; if (S.shorten) { S.shorten = null; render(); return; } chips.forEach((x, i) => x.setAttribute("aria-pressed", String(BAN_CHOICES[i].days === c.days))); check(); };
       days.append(b); return b;
     });
+    /* 整頁重畫會重做這個輸入框:被擋回來那一下,剛打的理由要還在(S.banNote) */
+    if (S.banNote) note.value = S.banNote;
     note.oninput = check;
-    g.onclick = () => act(g, async () => {
+    /* 會不會提早放人只問資料庫(0163 admin_ban);被擋回來(Shorten)就把確認那一行畫出來,不當成錯誤。 */
+    const send = (btn, shorten) => act(btn, async () => {
       const t = note.value.trim(), c = BAN_CHOICES.find((x) => x.days === S.days);
-      await api("ban", { id, target: r.target_id, note: t, days: S.days });
+      S.banNote = t;
+      try {
+        await api("ban", { id, target: r.target_id, note: t, days: S.days, ...(shorten ? { shorten: true } : {}) });
+      } catch (e) {
+        if (e instanceof Shorten) { S.shorten = { id, current: e.current }; throw new Stop(); }
+        throw e;
+      }
+      S.shorten = null; S.banNote = "";
       S.done[id] = { text: `${r.target_name ?? ""} ${c?.days === "forever" ? "永久停權" : "停權 " + c?.label}:「${t}」`, red: true };
       await afterWrite(id);
     });
+    g.onclick = () => send(g, false);
     put(box, el("p", "q", "停多久"), days, put(el("div", "row"), note, g));
+    if (S.shorten?.id === id) {
+      const c = BAN_CHOICES.find((x) => x.days === S.days);
+      const y = el("button", "btn danger", "改短"); y.dataset.k = "ban-shorten";
+      const n = el("button", "btn", "先不要"); n.dataset.k = "ban-keep";
+      y.onclick = () => send(y, true);
+      n.onclick = () => { S.shorten = null; S.banNote = ""; S.ask = null; render(); };
+      put(box, el("p", "q", shortenText(S.shorten.current, c?.label ?? "")), put(el("div", "row"), y, n));
+    }
+    check();
   } else {
     const g = el("button", "btn danger", "拿掉"), no = el("button", "btn", "先不要");
     no.onclick = () => { S.ask = null; render(); };
@@ -748,6 +772,13 @@ function system() {
   if ((c.failed_jobs ?? []).length) box.append(el("p", "mono", "失敗的:" + c.failed_jobs.join("、")));
   const pn = s.pgnet ?? {};
   line("伺服器互叫", pn.errors ? "yellow" : "green", pn.errors ? "有錯" : "正常", [[`最近 ${pn.window_hours ?? "—"} 小時`, `${pn.calls ?? 0} 次`], ["錯誤", String(pn.errors ?? 0)]]);
+  /* 0164:警報帳本(巡邏抄進來的,留 90 天)。被擋／沒送出去、巡邏停了＝紅(鈴鐺也響);其他出錯＝黃。 */
+  const nf = s.netfail ?? {};
+  const nfRed = (nf.blocked_24h ?? 0) > 0 || nf.patrol_stale === true;
+  line("背景工作", nfRed ? "red" : nf.failures_24h ? "yellow" : "green",
+    (nf.blocked_24h ?? 0) > 0 ? "被擋" : nf.patrol_stale === true ? "巡邏停了" : nf.failures_24h ? "有錯" : "正常",
+    [["24 小時出錯", `${nf.failures_24h ?? 0} 發`], ["被擋／沒送出去", String(nf.blocked_24h ?? 0)], ["7 天", `${nf.failures_7d ?? 0} 發`],
+     ["巡邏", nf.patrol_scanned_at ? mdhm(nf.patrol_scanned_at) : "沒跑過"]]);
   const q = s.quota ?? {};
   line("限流帳本", "manual", null, [["24 小時記了", `${q.hits ?? 0} 次`], ["人", String(q.users ?? 0)]]);
   out.push(card("", "狀態", null, box));
