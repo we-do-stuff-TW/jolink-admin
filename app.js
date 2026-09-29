@@ -1,4 +1,6 @@
-// 揪起來後台(第四百四十二輪)—— 畫面。照 Francis 09-28 點頭的樣品第三版(https://claude.ai/artifact/6EZRkLXYFr5jR1JVZkAesP)。
+// 揪起來後台(第四百四十二輪起;第四百四十五輪換成「奶霜」)—— 畫面。
+// 樣子照 Francis 09-29 從第三輪三版挑的一 奶霜(https://claude.ai/artifact/S5vVZw91eVWgZVmDJ2mrq5 第一版):
+// 奶油底、黏土卡、數字壓在兩道波浪上(波浪＝註冊過／那週活躍的人)。442 的骨架(登入、四關、讀資料、四個動作)沒動,只換「怎麼畫」。
 //
 // 這一支只准「怎麼畫」;「該不該、算成什麼」在 logic.js(探針測得到),登入在 auth.js,資料全部來自
 // supabase/functions/admin(四關的門,_shared/admin.ts)。
@@ -12,6 +14,7 @@ import * as Auth from "./auth.js";
 import {
   reasonText, KIND, BAN_CHOICES, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
   growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, matchFiles, qrDataUrl,
+  regCounts, waveSeries, niceScale, monotonePath,
 } from "./logic.js";
 
 /* 被嵌進別人的頁面就什麼都不畫:點擊劫持(把按鈕疊在一個看起來無害的頁面底下騙你按)。
@@ -45,7 +48,17 @@ const icon = (d, size = 16) => {
 };
 const I_SEARCH = "M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14zM20 20l-4-4", I_BACK = "M15 5l-7 7 7 7", I_X = "M6 6l12 12M18 6L6 18",
   I_GO = "M9 5l7 7-7 7", I_BELL = "M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2 2 0 0 0 4 0";
+/* 左邊選單:分頁、名字、圖示(一條線畫的,同一個粗細) */
+const NAV = [
+  ["overview", "總覽", "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"],
+  ["reports", "檢舉", "M5 21V4M5 4h12l-2.5 4.5L17 13H5"],
+  ["people", "人", "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2.5 20a6.5 6.5 0 0 1 13 0M16 3.6a4 4 0 0 1 0 7.3M21.5 20a6.5 6.5 0 0 0-4-6"],
+  ["feedback", "回饋", "M4 5h16v11H9.5L5 20v-4H4z"],
+  ["system", "系統", "M3 12h4l3-8 4 16 3-8h4"],
+];
 const sec = (t, n) => put(el("h2", "sec"), el("span", null, t), n ? el("i", null, n) : null);
+const card = (cls, title, meta, ...kids) => put(el("section", "card " + (cls || "")),
+  title ? put(el("header", "ch"), el("h2", null, title), meta ? el("span", "cm", meta) : null) : null, ...kids);
 const personTag = (p) => p?.gone ? stTag("mute", "已刪帳號")
   : p?.banned ? stTag("ink", p.until ? `停權到 ${mdhm(p.until)}` : "永久停權") : null;
 
@@ -122,7 +135,13 @@ async function toMfa() {
 /* ══ 讀資料 ══ */
 const LOAD = {
   overview: async () => { D.overview = await api("overview"); },
-  reports: async () => { const [q, b] = await Promise.all([api("queue"), api("banned")]); D.queue = q ?? []; D.banned = b ?? []; },
+  reports: async () => {
+    const [q, b] = await Promise.all([api("queue"), api("banned")]); D.queue = q ?? []; D.banned = b ?? [];
+    /* 電腦寬時清單跟詳情並排:還沒選就先選最舊的那筆待處理,右邊不留一張空卡(樣品 core.js 的作法;
+       窄的時候 CSS 只秀清單,這裡選了也看不到,點下去才進詳情) */
+    if (!S.sel || !D.queue.some((x) => x.id === S.sel)) S.sel = D.queue.find((x) => x.open)?.id ?? null;
+    if (S.sel) loadReport(S.sel);
+  },
   people: async () => { D.people = (await api("people")) ?? []; },
   feedback: async () => { D.feedback = (await api("feedback")) ?? []; },
   system: async () => { D.system = await api("system"); },
@@ -178,20 +197,26 @@ function go(view, opts = {}) {
 /* ══ 畫 ══ */
 function render() {
   if (FRAMED) return;
+  /* ⚠️ 整頁每次都整個重畫 —— 焦點原本在哪顆鈕,重畫後就掉回 body,用鍵盤的人每按一下都要從頭 Tab(445 稽核抓到)。
+     所以先記住焦點在哪一顆(data-k 或 id),重畫完放回去。 */
+  const a = document.activeElement, fk = a && root.contains(a) ? (a.dataset?.k || a.id || null) : null;
   root.textContent = "";
-  if (S.auth === "boot") { root.append(el("p", "loading", "讀取中…")); return; }
-  if (S.auth !== "ok") { root.append(loginView()); return; }
-  const app = el("div", "app");
-  put(app, rail(), mainView());
-  root.append(app, scrim(), drawerView());
+  if (S.auth === "boot") { root.append(el("p", "loading", "讀取中…")); syncDrawer(); return; }
+  if (S.auth !== "ok") { root.append(loginView()); syncDrawer(); return; }
+  root.append(put(el("div", "app"), rail(), mainView()));
+  syncDrawer();
+  if (fk && !S.drawer) (root.querySelector(`[data-k="${CSS.escape(fk)}"]`) ?? document.getElementById(fk))?.focus({ preventScroll: true });
 }
 
 function rail() {
-  const r = el("nav", "rail");
+  const r = el("nav", "rail"); r.setAttribute("aria-label", "後台");
   const b = el("div", "brand", "揪起來"); b.append(el("small", null, "後台"));
-  const t = el("div", "tabs"); t.setAttribute("role", "tablist");
-  [["overview", "總覽"], ["reports", "檢舉"], ["people", "人"], ["feedback", "回饋"], ["system", "系統"]].forEach(([id, label]) => {
-    const x = el("button", null, label); x.setAttribute("role", "tab"); x.setAttribute("aria-selected", String(S.view === id));
+  const t = el("div", "tabs");
+  /* 檢舉那一格帶待處理的筆數 —— 讀鈴鐺的(每一頁都會讀),不讀 queue(只有切到檢舉才讀) */
+  const open = Number(D.bell?.open_reports) || 0;
+  NAV.forEach(([id, label, d]) => {
+    const x = el("button"); x.dataset.k = "nav-" + id; if (S.view === id) x.setAttribute("aria-current", "page");
+    put(x, icon(d, 18), el("span", "lb", label), id === "reports" && open ? el("span", "pip", String(open)) : null);
     x.onclick = () => go(id); t.append(x);
   });
   return put(r, b, t, footBits("rail-foot"));
@@ -199,7 +224,7 @@ function rail() {
 function footBits(cls) {
   const f = el("div", cls);
   const re = el("button", "linkbtn ink", "重新整理"); re.onclick = () => refresh();
-  const lo = el("button", "linkbtn", "登出"); lo.onclick = async () => { await Auth.logout(); S.auth = "login"; S.loginErr = null; render(); };
+  const lo = el("button", "linkbtn", "登出"); lo.onclick = async () => { await Auth.logout(); S.auth = "login"; S.loginErr = null; S.drawer = null; render(); };
   return put(f, S.asof ? el("span", "asof", S.asof) : null, re, lo);
 }
 
@@ -210,7 +235,9 @@ function top(title, n, withSearch) {
   if (withSearch) {
     const s = el("label", "search"); s.append(icon(I_SEARCH));
     const inp = el("input"); inp.type = "search"; inp.placeholder = "找人"; inp.value = S.q; inp.setAttribute("aria-label", "找人"); inp.id = "q-" + S.view;
-    inp.oninput = () => { S.q = inp.value; const box = root.querySelector("[data-list]"); if (box) box.replaceWith(S.view === "people" ? peopleTable() : queueList()); };
+    /* ⚠️ 檢舉頁的清單有兩種(待處理／全部 是 queueList、已處理 是 handledList)—— 442 一律換成 queueList,
+          在「已處理」打字就變成待處理的清單(445 稽核抓到) */
+    inp.oninput = () => { S.q = inp.value; const box = root.querySelector("[data-list]"); if (box) box.replaceWith(S.view === "people" ? peopleTable() : S.rtab === "handled" ? handledList() : queueList()); };
     s.append(inp); t.append(s);
   }
   t.append(bellView());
@@ -220,9 +247,9 @@ function top(title, n, withSearch) {
 function bellView() {
   const items = bellItems(D.bell);
   const w = el("div", "bellw");
-  const b = el("button", "bell"); b.setAttribute("aria-label", items.length ? `${items.length} 件要處理` : "沒有要處理的事");
+  const b = el("button", "bell"); b.dataset.k = "bell"; b.setAttribute("aria-label", items.length ? `${items.length} 件要處理` : "沒有要處理的事");
   b.setAttribute("aria-expanded", String(S.bell));
-  b.append(icon(I_BELL, 22)); if (items.length) b.append(el("span", "pip", String(items.length)));
+  b.append(icon(I_BELL, 21)); if (items.length) b.append(el("span", "pip", String(items.length)));
   b.onclick = (e) => { e.stopPropagation(); S.bell = !S.bell; render(); };
   w.append(b);
   if (S.bell) {
@@ -234,7 +261,7 @@ function bellView() {
       put(r, el("span", "dot " + it.dot), tx, icon(I_GO, 18));
       r.onclick = () => {
         go(it.go.view, it.go);
-        if (it.go.person) { S.drawer = { id: it.go.person, mode: "report" }; loadPerson(it.go.person); render(); }
+        if (it.go.person) openPerson(it.go.person, "report");
       };
       pop.append(r);
     });
@@ -245,14 +272,15 @@ function bellView() {
 document.addEventListener("click", () => { if (S.bell) { S.bell = false; render(); } });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (S.bell) { S.bell = false; render(); } else if (S.drawer) { S.drawer = null; render(); }
+  if (S.bell) { S.bell = false; render(); } else if (S.drawer) closeDrawer();
 });
 
 function mainView() {
   const m = el("main", "main");
-  const wrap = el("div", S.view === "reports" ? "wrap wide" : "wrap");
+  const wrap = el("div", "wrap v-" + S.view);
   const body = { overview, reports, people, feedback, system }[S.view]();
   put(wrap, ...body, footBits("mobile-foot"));
+  if (S.view === "overview" && D.overview) intro(wrap);
   return put(m, wrap);
 }
 function oops(v) {
@@ -261,48 +289,114 @@ function oops(v) {
   const r = el("button", "btn sm", "再試一次"); r.onclick = () => loadView(v, true); b.append(r);
   return b;
 }
-const loading = (has) => (has ? null : el("p", "loading", "讀取中…"));
+/* ⚠️ 讀不到(S.err)的時候只留紅條＋再試一次 —— 同時再印「讀取中…」＝說謊(它不會再讀了;445 收尾審查抓到) */
+const loading = (v) => (S.err[v] ? null : el("p", "loading", "讀取中…"));
+
+/* ══ 開場那一下 ══ 總覽第一次有資料時:波浪從左畫到右、球落到這週。
+   ⚠️ 整頁每次 render 都整個重畫(鈴鐺、資料陸續到)—— 直接加 class 的話動畫會一直從頭演。
+      所以記住第一次畫的時間,之後重畫就用負的延遲接著演,演完就不再加(樣品上驗過同一招)。 */
+let intro0 = 0;
+function intro(wrap) {
+  const now = performance.now();
+  if (!intro0) intro0 = now;
+  const e = now - intro0;
+  if (e > 2600) return;
+  wrap.classList.add("intro");
+  wrap.style.setProperty("--since", `${-Math.round(e)}ms`);
+}
 
 /* ══ 總覽 ══ */
 function overview() {
   const ov = D.overview;
   const out = [top("總覽"), oops("overview")];
-  if (!ov) { out.push(loading(false)); return out; }
-  out.push(sec("這週", md(ov.weeks?.[ov.weeks.length - 1]?.week) + " 起"));
-  const wk = el("div", "week");
-  weekPair(ov).forEach((x) => {
-    const d = deltaText(x.now, x.before);
-    put(wk, put(el("div", "wk"), el("span", "k", x.k), el("b", null, String(x.now)), el("span", "d " + d.cls, d.text)));
-  });
-  out.push(wk);
-
-  out.push(sec("驗證", "近 21 天"));
-  const h = el("section", "h0");
-  const nn = netNew(ov.gate);
-  const bb = el("b", null, nn == null ? "—" : String(nn)); bb.append(el("span", null, " / 5"));
-  put(h, put(el("div", "big"), bb, el("div", "lab", "場因為 App 才見到面")));
-  const seg = el("div", "seg5"); for (let i = 0; i < 5; i++) seg.append(el("i", i < (Number(nn) || 0) ? "on" : ""));
-  h.append(seg);
-  gateRows(ov.gate).forEach((g) => {
-    const row = el("div", "gate"); row.title = g.rule;
-    const v = el("span", "v"); g.kv.forEach(([k, n], i) => { if (i) v.append(document.createTextNode("　")); v.append(document.createTextNode(k + " "), el("b", null, n)); });
-    put(row, el("span", "dot " + (g.light in { green: 1, yellow: 1, red: 1, invalid: 1, manual: 1 } ? g.light : "manual")), el("span", "nm", g.name), v, stTag(g.cls, g.word));
-    h.append(row);
-  });
-  out.push(h);
-
-  out.push(sec("八週"));
-  out.push(weeksChart(ov.weeks ?? []));
-  /* 標題跟圖上的終點用同一個數(註冊過幾個人,含後來刪了帳號的)—— 「現在還在的」在「人」那頁的標題。
-     兩個不一樣的數並排會像算錯。 */
-  const g = growthSeries(ov.growth);
-  out.push(sec("成長", g.length ? `註冊過 ${g[g.length - 1].cum} 人` : ""));
-  out.push(growthChart(ov));
+  if (!ov) {
+    /* 資料還沒到:大卡的殼跟「目前註冊人數」先在,數字的位置先留著 —— 不然資料一到整頁往下跳 */
+    if (!S.err.overview) out.push(put(el("section", "hero wait"), put(el("div", "hv"), el("p", "hl", "目前註冊人數"), el("p", "hn", "\u00a0"), el("div", "hs")), el("div", "wv")), loading("overview"));
+    return out;
+  }
+  const rc = regCounts(ov);
+  out.push(put(el("section", "hero"),
+    put(el("div", "hv"), el("p", "hl", "目前註冊人數"), el("p", "hn", rc.now ?? "—"), regChips(rc)), waves(ov)));
+  out.push(sec("這週", md(ov.weeks?.[ov.weeks.length - 1]?.week) + " 起"), kpis(ov));
+  out.push(put(el("div", "grid2"),
+    card("gatec", "驗證", "近 21 天", ...gateRing(ov)),
+    card("", "每週新註冊", rc.ever != null ? `註冊過 ${rc.ever} 人` : null, signupPlot(ov, 170), invites(ov))));
+  out.push(card("", "八週", null, ...weeksPlot(ov)));
   return out;
 }
+/* 大數字底下那兩顆:這週新來幾個、刪了帳號幾個。後者是為了讓 10(目前)跟 11(註冊過)對得起來 —— regCounts 檔頭。 */
+function regChips(rc) {
+  const w = el("div", "hs");
+  put(w, el("span", "chip" + (rc.week > 0 ? " up" : ""), `這週 +${rc.week}`), rc.gone ? el("span", "chip", `刪了帳號 ${rc.gone}`) : null);
+  return w;
+}
+/* 兩道波浪:後面藍的＝註冊過、前面桃色＝那週活躍的人(活躍 ≤ 註冊過,所以桃色永遠在下面;兩道之間的空隙＝註冊了但那週沒動的人)。
+   SVG 拉滿整條(preserveAspectRatio none),線用 non-scaling-stroke;球、數字是 HTML(字不會被拉歪)。 */
+function waves(ov) {
+  const w = waveSeries(ov);
+  if (w.length < 2) return null;
+  const reg = w.map((x) => x.reg), act = w.map((x) => x.active);
+  const max = Math.max(1, ...reg, ...act) * 1.25;
+  const W = 1000, H = 1000, X0 = 30, X1 = 900;
+  const px = (i) => X0 + i / (w.length - 1) * (X1 - X0), py = (v) => H - v / max * H;
+  const s = svgBox(W, H, `近 ${w.length} 週:註冊過的人從 ${reg[0]} 到 ${reg[reg.length - 1]},這週活躍的人 ${act[act.length - 1]}`);
+  s.setAttribute("class", "wvs");
+  const defs = svgEl("defs", {});
+  ["wreg", "wact"].forEach((k) => {
+    const lg = svgEl("linearGradient", { id: "wg-" + k, x1: 0, y1: 0, x2: 0, y2: 1 });
+    lg.append(svgEl("stop", { offset: 0, class: "s0" }), svgEl("stop", { offset: 1, class: "s1" }));
+    defs.append(lg);
+  });
+  s.append(defs);
+  [[reg, "wreg"], [act, "wact"]].forEach(([arr, cls]) => {
+    const d = monotonePath(arr.map((v, i) => [px(i), py(v)]));
+    s.append(svgEl("path", { d: `${d} L${X1} ${H} L${X0} ${H} Z`, class: "wa " + cls }));
+    s.append(svgEl("path", { d, class: "we " + cls, "vector-effect": "non-scaling-stroke" }));
+  });
+  const at = (v) => (v / max * 100).toFixed(2) + "%";
+  const ball = el("span", "ball"); ball.style.left = X1 / 10 + "%"; ball.style.bottom = at(reg[reg.length - 1]);
+  const lr = put(el("span", "wl wreg"), el("b", null, String(reg[reg.length - 1])), document.createTextNode("註冊過"));
+  lr.style.bottom = at(reg[reg.length - 1]);
+  const la = put(el("span", "wl wact"), el("b", null, String(act[act.length - 1])), document.createTextNode("這週活躍"));
+  la.style.bottom = at(act[act.length - 1]);
+  const xs = put(el("div", "wx"), el("span", null, md(w[0].week)), el("span", null, "這週"));
+  return put(el("div", "wv"), s, ball, lr, la, xs);
+}
+function kpis(ov) {
+  const wrap = el("div", "kpis");
+  weekPair(ov).forEach((x, i) => {
+    const d = deltaText(x.now, x.before);
+    put(wrap, put(el("div", "kpi k" + i), el("span", "k", x.k), el("b", null, String(x.now)), el("span", "d " + d.cls, d.text)));
+  });
+  return wrap;
+}
+/* 驗證:淨增量 / 5(L4 的門檻)畫成一圈 —— 圈是資料,不是裝飾;沒有分母的數字不准畫圈。 */
+function ring(v, of, size = 132, sw = 13) {
+  const r = (size - sw) / 2, c = 2 * Math.PI * r, cx = size / 2, f = Math.max(0, Math.min(1, (Number(v) || 0) / of));
+  const s = svgBox(size, size, `${v ?? "—"} / ${of}`);
+  s.setAttribute("class", "ring"); s.removeAttribute("preserveAspectRatio");
+  s.append(svgEl("circle", { cx, cy: cx, r, class: "rt", "stroke-width": sw }));
+  if (f > 0) {
+    const a = svgEl("circle", { cx, cy: cx, r, class: "ra", "stroke-width": sw, "stroke-dasharray": `${(c * f).toFixed(1)} ${c.toFixed(1)}`, transform: `rotate(-90 ${cx} ${cx})` });
+    a.style.setProperty("--c", c.toFixed(1)); s.append(a);
+  }
+  return put(el("div", "ringw"), s, put(el("div", "rc"), el("b", null, v ?? "—"), el("span", null, "/ " + of)));
+}
+function gateRing(ov) {
+  const list = el("div", "gates");
+  gateRows(ov.gate).forEach((g) => {
+    const row = el("div", "gate"); row.title = g.rule;
+    const v = el("span", "v"); g.kv.forEach(([k, n], i) => { if (i) v.append(el("span", "sep", "·")); v.append(document.createTextNode(k + " "), el("b", null, n)); });
+    put(row, el("span", "dot " + (g.light in { green: 1, yellow: 1, red: 1, invalid: 1, manual: 1 } ? g.light : "manual")), el("span", "nm", g.name), v, stTag(g.cls, g.word));
+    list.append(row);
+  });
+  return [put(el("div", "h0r"), ring(netNew(ov.gate), 5), el("span", "h0l", "場因為 App 才見到面")), list];
+}
+
+/* ══ 圖 ══ 格線與刻度用 HTML(字不會被 viewBox 拉歪)、長條與點用 HTML、折線用 SVG(non-scaling-stroke)。 */
 function legend(items) {
   const lg = el("div", "legend");
-  items.forEach(([c, t]) => { const i = el("i"); i.style.background = c; put(lg, put(el("span"), i, document.createTextNode(t))); });
+  items.forEach(([cls, t]) => put(lg, put(el("span"), el("i", cls), document.createTextNode(t))));
   return lg;
 }
 function svgBox(W, H, label) {
@@ -311,84 +405,68 @@ function svgBox(W, H, label) {
   return svg;
 }
 function svgEl(tag, attrs) { const e = document.createElementNS(NS, tag); Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, String(v))); return e; }
-function xLabels(list, fmt) {
-  const xl = el("div", "xl" + (list.length > 6 ? " thin" : ""));
-  xl.style.gridTemplateColumns = `repeat(${Math.max(1, list.length)},1fr)`;
-  list.forEach((w, i) => xl.append(el("span", i === list.length - 1 ? "now" : "", fmt(w))));
-  return xl;
+function plot({ labels, bars, line, dots, h = 180, barLabels = false, label }) {
+  const n = Math.max(1, labels.length);
+  const all = [bars?.v, line?.v, dots?.v].filter(Boolean).flat().map(Number).filter(Number.isFinite);
+  /* 長條頭上要寫數字的,留兩成的頭(不然最高那根的數字撞到最上面的刻度) */
+  const { step, max } = niceScale(Math.max(1, ...all) * (barLabels ? 1.2 : 1));
+  const p = el("div", "plot"); p.style.height = h + "px";
+  for (let t = 0; t <= max; t += step) { const g = el("div", "gl" + (t === 0 ? " base" : "")); g.style.bottom = (t / max * 100) + "%"; g.append(el("span", null, String(t))); p.append(g); }
+  const pct = (v) => (Number(v) || 0) / max * 100;
+  if (bars) bars.v.forEach((v, i) => {
+    if (!v) return;
+    const b = el("span", "cbar" + (i === n - 1 ? " now" : "")); b.style.left = `${(i + 0.5 - bars.w / 2) / n * 100}%`; b.style.width = `${bars.w / n * 100}%`; b.style.height = pct(v) + "%";
+    if (barLabels) b.append(el("em", null, String(v)));
+    p.append(b);
+  });
+  const s = svgBox(1000, 1000, label); s.setAttribute("class", "ps");
+  const cx = (i) => (i + 0.5) * 1000 / n, y = (v) => 1000 - pct(v) * 10;
+  if (line) s.append(svgEl("path", { d: line.v.map((v, i) => (i ? "L" : "M") + cx(i) + " " + y(v)).join(" "), class: "ln", "vector-effect": "non-scaling-stroke" }));
+  p.append(s);
+  const dot = (v, i, cls) => { const d = el("span", "pt " + cls); d.style.left = `${(i + 0.5) / n * 100}%`; d.style.bottom = pct(v) + "%"; return d; };
+  if (line) line.v.forEach((v, i) => p.append(dot(v, i, "pl")));
+  if (dots) dots.v.forEach((v, i) => { if (v) p.append(dot(v, i, "pd")); });
+  const xl = el("div", "xl" + (n > 8 ? " thin" : "")); xl.style.gridTemplateColumns = `repeat(${n},1fr)`;
+  labels.forEach((t, i) => xl.append(el("span", i === n - 1 ? "now" : "", t)));
+  return put(el("div", "plotw"), p, xl);
 }
-function weeksChart(weeks) {
-  const ch = el("section", "chart");
-  ch.append(legend([["var(--blue)", "活躍的人"], ["#C9D9FB", "開的揪"], ["var(--coral)", "見到面"]]));
-  const plot = el("div", "plot"); plot.append(el("div", "dots"));
-  const n = weeks.length, W = 800, H = 180;
-  const maxV = Math.max(4, ...weeks.map((w) => Math.max(w.active ?? 0, w.sets ?? 0, w.met ?? 0))) * 1.15;
-  const cx = (i) => (i + 0.5) * W / Math.max(1, n), y = (v) => H - 8 - (v / maxV) * (H - 24);
-  const svg = svgBox(W, H, "八週的活躍人數、開的揪與見到面");
-  weeks.forEach((w, i) => {
-    const bw = W / Math.max(1, n) * 0.42, v = w.sets ?? 0;
-    if (v > 0) svg.append(svgEl("rect", { x: cx(i) - bw / 2, width: bw, y: y(v), height: H - 8 - y(v), rx: 6, fill: "#C9D9FB" }));
-  });
-  if (n) svg.append(svgEl("path", { d: weeks.map((w, i) => (i ? "L" : "M") + cx(i) + " " + y(w.active ?? 0)).join(" "), fill: "none", stroke: "#286EFA", "stroke-width": 3, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke" }));
-  plot.append(svg);
-  weeks.forEach((w, i) => {
-    const dot = (v, c) => { const s = el("span", "pt"); s.style.left = `${(i + 0.5) / n * 100}%`; s.style.top = `${y(v) / H * 100}%`; s.style.background = c; return s; };
-    plot.append(dot(w.active ?? 0, "#286EFA"));
-    if (w.met) plot.append(dot(w.met, "#FD767D"));
-  });
-  return put(ch, plot, xLabels(weeks, (w) => md(w.week)));
+function weeksPlot(ov) {
+  const w = ov.weeks ?? [];
+  return [legend([["k-line", "活躍的人"], ["k-bar", "開的揪"], ["k-dot", "見到面"]]),
+    plot({ labels: w.map((x) => md(x.week)), bars: { v: w.map((x) => x.sets ?? 0), w: 0.44 }, line: { v: w.map((x) => x.active ?? 0) },
+      dots: { v: w.map((x) => x.met ?? 0) }, label: "八週的活躍人數、開的揪與見到面" })];
 }
-function growthChart(ov) {
-  const ch = el("section", "chart");
-  ch.append(legend([["var(--blue)", "累計註冊"], ["#C9D9FB", "那週新來的"]]));
-  const g = growthSeries(ov.growth);
-  const plot = el("div", "plot"); plot.append(el("div", "dots"));
-  const n = g.length, W = 800, H = 180, maxV = Math.max(4, ...g.map((x) => x.cum)) * 1.15;
-  const cx = (i) => (i + 0.5) * W / Math.max(1, n), y = (v) => H - 8 - (v / maxV) * (H - 24);
-  const svg = svgBox(W, H, "累計註冊人數與每週新註冊");
-  g.forEach((x, i) => {
-    if (!x.n) return; const bw = W / Math.max(1, n) * 0.42;
-    svg.append(svgEl("rect", { x: cx(i) - bw / 2, width: bw, y: y(x.n), height: H - 8 - y(x.n), rx: 6, fill: "#C9D9FB" }));
-  });
-  if (n) {
-    const line = g.map((x, i) => (i ? "L" : "M") + cx(i) + " " + y(x.cum)).join(" ");
-    svg.append(svgEl("path", { d: `${line} L${cx(n - 1)} ${H - 8} L${cx(0)} ${H - 8} Z`, fill: "rgba(40,110,250,.08)" }));
-    svg.append(svgEl("path", { d: line, fill: "none", stroke: "#286EFA", "stroke-width": 3, "vector-effect": "non-scaling-stroke" }));
-  }
-  plot.append(svg);
-  if (n) {
-    const last = g[n - 1];
-    const dot = el("span", "pt"); dot.style.left = `${(n - 0.5) / n * 100}%`; dot.style.top = `${y(last.cum) / H * 100}%`; dot.style.background = "#286EFA";
-    const lab = el("span", "endlab", `${last.cum} 人`); lab.style.top = `${y(last.cum) / H * 100}%`;
-    plot.append(dot, lab);
-  }
+function signupPlot(ov, h) {
+  const g = growthSeries(ov.growth, 12);
+  return plot({ labels: g.map((x) => md(x.week)), bars: { v: g.map((x) => x.n), w: 0.5 }, barLabels: true, h, label: "每週新註冊的人數" });
+}
+function invites(ov) {
   const t = ov.totals ?? {};
   const inv = el("div", "inv");
   [["發出的邀請", t.invites], ["被點開", t.invite_opened], ["用掉", t.invite_used], ["朋友關係", t.friendships]].forEach(([k, v], i) => {
     if (i) inv.append(el("span", "ar", i === 3 ? "·" : "→"));
     put(inv, put(el("span", "iv"), el("b", null, v ?? "—"), document.createTextNode(k)));
   });
-  return put(ch, plot, xLabels(g, (x) => md(x.week)), inv);
+  return inv;
 }
 
 /* ══ 檢舉 ══ */
 const openRows = () => (D.queue ?? []).filter((r) => r.open);
 function reports() {
   const out = [top("檢舉", null, S.rtab !== "banned"), oops("reports")];
-  const segs = el("div", "segs"); segs.setAttribute("role", "tablist");
+  const segs = el("div", "segs");
   [["open", "待處理", openRows().length], ["handled", "已處理"], ["all", "全部"], ["banned", "停權中", (D.banned ?? []).length]].forEach(([id, label, n]) => {
-    const b = el("button"); b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(S.rtab === id));
+    const b = el("button"); b.dataset.k = "seg-" + id; b.setAttribute("aria-pressed", String(S.rtab === id));
     put(b, el("span", null, label), n ? el("span", "num", String(n)) : null);
     b.onclick = () => { S.rtab = id; S.rdetail = false; S.ask = null; S.actErr = null; render(); };
     segs.append(b);
   });
   out.push(segs);
-  if (!D.queue) { out.push(loading(false)); return out; }
+  if (!D.queue) { out.push(loading("reports")); return out; }
   if (S.rtab === "banned") { out.push(bannedList()); return out; }
   if (S.rtab === "handled") { out.push(handledList()); return out; }
-  const sp = el("div", "split" + (S.rdetail ? " detail" : ""));
-  put(sp, queueList(), detailPane());
-  out.push(sp);
+  /* 清單是空的(沒有待處理／搜不到)就不畫右邊那張卡 —— 一張沒有內容的黏土卡比沒有更糟 */
+  out.push(queueRows().length ? put(el("div", "split" + (S.rdetail ? " detail" : "")), queueList(), detailPane()) : queueList());
   return out;
 }
 function queueRows() {
@@ -400,7 +478,7 @@ function queueList() {
   const rows = queueRows();
   if (!rows.length) { box.append(el("p", "empty", S.q ? "沒有叫這個名字的人被檢舉。" : S.rtab === "open" ? "沒有待處理的檢舉。" : "還沒有任何檢舉。")); return box; }
   rows.forEach((r) => {
-    const b = el("button", "qi"); b.setAttribute("aria-current", String(S.sel === r.id && S.rdetail));
+    const b = el("button", "qi"); b.dataset.k = "qi-" + r.id; b.setAttribute("aria-current", String(S.sel === r.id));
     const who = { gone: r.target_gone, banned: r.target_banned, until: r.target_until };
     const w = r.open ? el("span", "w" + (r.hours >= 12 ? " late" : ""), "等了 " + waited(r.hours)) : el("span", "w", md(r.handled_at));
     put(b, put(el("div", "r1"), el("span", "nm", r.target_name ?? "(查不到名字)"), personTag(who), w),
@@ -421,7 +499,7 @@ function detailPane() {
   const R = D.report[S.sel];
   const r = R?.row ?? base;
   const who = { gone: r.target_gone, banned: r.target_banned, until: r.target_until };
-  const see = el("button", "linkbtn ink", "看這個人"); see.onclick = () => { S.drawer = { id: r.target_id, mode: "report" }; render(); loadPerson(r.target_id); };
+  const see = el("button", "btn sm", "看這個人"); see.dataset.k = "see"; see.onclick = () => openPerson(r.target_id, "report");
   put(pane, put(el("div", "ph"), el("span", "who", r.target_name ?? "(查不到名字)"), r.target_handle ? el("span", "hd", "@" + r.target_handle) : null,
     personTag(who), el("span", "sp"), see));
   const kv = el("dl", "kv");
@@ -444,7 +522,7 @@ function detailPane() {
     return pane;
   }
   const acts = el("div", "acts");
-  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.actErr = null; render(); }; return b; };
+  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.actErr = null; render(); }; return b; };
   put(acts, mk("看過了", "solid", "handle"), mk("停權", "danger", "ban"),
     r.target_type === "message" && r.message_live ? mk("把這則拿掉", "line", "remove") : null);
   pane.append(acts);
@@ -458,10 +536,13 @@ function evidenceView(R, r) {
   const lines = chatLines(ev);
   const { byLine, loose } = matchFiles(lines, R.files);
   const names = R.names ?? {};
-  const h = sec("證據", hasContext(ev) ? "前後各 9 則" : "那一則");
   const box = el("div", "evwrap" + (S.fog ? " fog" : ""));
-  const tg = el("button", "btn sm", S.fog ? "看清楚" : "霧回去"); tg.onclick = () => { S.fog = !S.fog; render(); };
-  const chat = el("div", "chat");
+  /* 霧用切 class,不整頁重畫 —— 重畫會換掉節點,模糊散開的過場就被吃掉了 */
+  const tg = el("button", "btn sm", S.fog ? "看清楚" : "霧回去"); tg.dataset.k = "fog";
+  const chat = el("div", "chat"), lz = loose.length ? el("div", "loose") : null;
+  /* 霧著的時候裡面的下載連結也不准被 Tab 到(pointer-events 只擋滑鼠,焦點會落在看不見的東西上)—— inert */
+  const fogged = () => { chat.inert = S.fog; if (lz) lz.inert = S.fog; };
+  tg.onclick = () => { S.fog = !S.fog; box.classList.toggle("fog", S.fog); tg.textContent = S.fog ? "看清楚" : "霧回去"; fogged(); };
   lines.forEach((l, i) => {
     const them = l.sender && l.sender === r.target_id;
     const m = el("div", "msg" + (them ? " them" : "") + (l.anchor ? " anchor" : "") + (l.anchor && r.message_live === false ? " gone" : ""));
@@ -474,17 +555,18 @@ function evidenceView(R, r) {
     put(m, el("span", "by", names[l.sender] ?? "(查不到名字)"), bb, el("span", "tm", hm(l.at)));
     chat.append(m);
   });
-  put(box, put(el("div", "evtools"), tg), chat);
-  if (loose.length) { const lz = el("div", "loose"); loose.forEach((f) => lz.append(fileNode(f, true))); box.append(lz); }
+  put(box, put(el("div", "evtools"), el("span", "evh", hasContext(ev) ? "證據 · 前後各 9 則" : "證據 · 那一則"), tg), chat);
+  if (lz) { loose.forEach((f) => lz.append(fileNode(f, true))); box.append(lz); }
+  fogged();
   const errs = [];
   if (ev.files_error) errs.push(el("div", "done mute", "有檔沒拷到:" + ev.files_error));
   if (ev.context_error) errs.push(el("div", "done mute", "前後文沒存到:" + ev.context_error));
-  return [h, box, ...errs];
+  return [box, ...errs];
 }
 function fileNode(f, small) {
   if (!f.url) return el("span", "note", `(${f.name},檔已經不在了)`);
   if (f.img) {
-    const img = el("img"); img.src = f.url; img.alt = ""; img.referrerPolicy = "no-referrer"; img.loading = "lazy";
+    const img = el("img"); img.src = f.url; img.alt = small ? "證據附件" : "證據照片"; img.referrerPolicy = "no-referrer"; img.loading = "lazy";
     if (small) img.className = "sm";
     return img;
   }
@@ -501,6 +583,7 @@ function askBox(key, r) {
     catch (e) { if (!(e instanceof Stop)) S.actErr = e.message; }
     finally { S.busy = false; }
     render();
+    say(S.actErr || S.done[id]?.text || "");
   };
   if (key === "handle") {
     const g = el("button", "btn solid", "確定"); g.disabled = true; note.oninput = () => { g.disabled = !note.value.trim(); };
@@ -515,7 +598,7 @@ function askBox(key, r) {
     const days = el("div", "row"); const g = el("button", "btn danger", "停權 " + (r.target_name ?? "")); g.disabled = true;
     const check = () => { g.disabled = S.days == null || !note.value.trim(); };
     const chips = BAN_CHOICES.map((c) => {
-      const b = el("button", "chipbtn", c.label); b.setAttribute("aria-pressed", String(S.days === c.days));
+      const b = el("button", "chipbtn", c.label); b.dataset.k = "day-" + c.days; b.setAttribute("aria-pressed", String(S.days === c.days));
       b.onclick = () => { S.days = c.days; chips.forEach((x, i) => x.setAttribute("aria-pressed", String(BAN_CHOICES[i].days === c.days))); check(); };
       days.append(b); return b;
     });
@@ -567,8 +650,8 @@ function bannedList() {
           S.done["unban:" + p.id] = { text: `解封了:「${t}」${res?.reopened ? `,${res.reopened} 筆檢舉重新回到待處理` : ""}` };
           await Promise.all([loadBell(), LOAD.reports()]);
           D.people = null;
-        } catch (e) { if (!(e instanceof Stop)) { err.textContent = e.message; err.hidden = false; g.disabled = false; S.busy = false; return; } }
-        S.busy = false; render();
+        } catch (e) { if (!(e instanceof Stop)) { err.textContent = e.message; err.hidden = false; g.disabled = false; S.busy = false; say(e.message); return; } }
+        S.busy = false; render(); say(S.done["unban:" + p.id]?.text ?? "");
       };
       put(a, put(el("div", "row"), note, g), err); r.append(a); un.disabled = true; note.focus();
     };
@@ -581,7 +664,7 @@ function handledList() {
   const rows = (D.queue ?? []).filter((r) => !r.open && matchName(S.q, r.target_name, r.target_handle));
   if (!rows.length) { box.append(el("p", "empty", S.q ? "沒有叫這個名字的人。" : "還沒有處理過的檢舉。")); return box; }
   rows.forEach((h) => {
-    const b = el("button", "hi");
+    const b = el("button", "hi"); b.dataset.k = "hi-" + h.id;
     put(b, el("span", "nm", h.target_name ?? "(查不到名字)"), el("span", "nt", h.handled_note ?? ""),
       put(el("span", "rt"), stTag(h.auto_closed ? "mute" : "ok", h.auto_closed ? "自動" : "人工"), el("span", "mono", mdhm(h.handled_at))));
     b.onclick = () => { S.rtab = "all"; S.sel = h.id; S.rdetail = true; S.fog = true; render(); loadReport(h.id); };
@@ -595,10 +678,10 @@ const latestBuild = () => D.bell?.latest_build ?? null;
 function people() {
   const rows = D.people;
   const out = [top("人", rows ? rows.filter((p) => !p.gone).length : null, true), oops("people")];
-  if (!rows) { out.push(loading(false)); return out; }
+  if (!rows) { out.push(loading("people")); return out; }
   const f = el("div", "filters");
   peopleFilters(latestBuild()).forEach((x) => {
-    const b = el("button"); b.setAttribute("aria-pressed", String(S.pf === x.id));
+    const b = el("button"); b.dataset.k = "pf-" + x.id; b.setAttribute("aria-pressed", String(S.pf === x.id));
     put(b, el("span", null, x.label), el("b", null, String(rows.filter(x.fn).length)));
     b.onclick = () => { S.pf = x.id; render(); };
     f.append(b);
@@ -609,20 +692,20 @@ function people() {
 function peopleTable() {
   const box = el("div", "ptable"); box.dataset.list = "1";
   const head = el("div", "prow head");
-  ["", "版本", "最近有動作", "朋友", "開揪 / 參加", ""].forEach((t) => head.append(el("span", null, t)));
+  ["名字", "版本", "最近有動作", "朋友", "開揪 / 參加", "見到面", ""].forEach((t) => head.append(el("span", null, t)));
   box.append(head);
   const fx = peopleFilters(latestBuild()).find((x) => x.id === S.pf) ?? peopleFilters(latestBuild())[0];
   const rows = (D.people ?? []).filter(fx.fn).filter((p) => matchName(S.q, p.name, p.handle));
   if (!rows.length) { box.append(el("p", "empty", "沒有符合的人。")); return box; }
   rows.forEach((p) => {
-    const b = el("button", "prow");
+    const b = el("button", "prow"); b.dataset.k = "p-" + p.id;
     const who = el("span", "who"); put(who, el("b", null, p.name ?? "(查不到名字)"), el("span", null, p.handle ? "@" + p.handle : "沒有自選 ID"));
     const bn = buildNum(p.build);
     const bd = el("span", "c bd" + (bn == null ? " none" : isOld(p, latestBuild()) ? " old" : ""), bn == null ? (p.build ? p.build : "沒回報過") : String(bn));
     const tag = personTag(p) || (p.reports ? stTag("warm", "被檢舉 " + p.reports) : null);
     put(b, who, bd, el("span", "c la", p.last ? md(p.last) : "—"), el("span", "c fr", String(p.friends ?? 0)),
-      el("span", "c hj", `${p.hosted ?? 0} / ${p.joined ?? 0}`), tag ? put(el("span", "stc"), tag) : el("span"));
-    b.onclick = () => { S.drawer = { id: p.id, mode: "person" }; render(); loadPerson(p.id); };
+      el("span", "c hj", `${p.hosted ?? 0} / ${p.joined ?? 0}`), el("span", "c mt", String(p.met ?? 0)), tag ? put(el("span", "stc"), tag) : el("span"));
+    b.onclick = () => openPerson(p.id, "person");
     box.append(b);
   });
   return box;
@@ -632,7 +715,7 @@ function peopleTable() {
 function feedback() {
   const rows = D.feedback;
   const out = [top("回饋", rows ? rows.length : null), oops("feedback")];
-  if (!rows) { out.push(loading(false)); return out; }
+  if (!rows) { out.push(loading("feedback")); return out; }
   if (!rows.length) { out.push(el("p", "empty", "還沒有人寫過。")); return out; }
   const box = el("section", "fblist");
   const week = Date.now() - 7 * 86400000;
@@ -651,13 +734,11 @@ const STORE_NAME = { memory: "憶裡的照片與影片", live: "還在跑的場"
 function system() {
   const s = D.system;
   const out = [top("系統"), oops("system")];
-  if (!s) { out.push(loading(false)); return out; }
-  const box = el("section", "sys");
+  if (!s) { out.push(loading("system")); return out; }
+  const box = el("div", "sys");
   const line = (nm, light, word, kv) => {
-    const r = el("div", "srow");
-    const v = el("span", "v"); kv.forEach(([k, n], i) => { if (i) v.append(document.createTextNode("　")); v.append(document.createTextNode(k + " "), el("b", null, n)); });
-    put(r, el("span", "dot " + light), el("span", "nm", nm), v, word ? stTag(light === "green" ? "ok" : light === "red" ? "red" : "warm", word) : null);
-    box.append(r);
+    const v = el("span", "v"); kv.forEach(([k, n], i) => { if (i) v.append(el("span", "sep", "·")); v.append(document.createTextNode(k + " "), el("b", null, n)); });
+    put(box, put(el("div", "srow"), el("span", "dot " + light), el("span", "nm", nm), v, word ? stTag(light === "green" ? "ok" : light === "red" ? "red" : "warm", word) : null));
   };
   const pf = s.push_fatal_30d ?? 0;
   line("推播", pf ? "red" : "green", pf ? "出錯" : "正常", pf ? [["30 天內全站級錯誤", `${pf} 次`], ["最近一次", mdhm(s.push_fatal_last)]] : [["30 天內全站級錯誤", "0"]]);
@@ -669,93 +750,121 @@ function system() {
   line("伺服器互叫", pn.errors ? "yellow" : "green", pn.errors ? "有錯" : "正常", [[`最近 ${pn.window_hours ?? "—"} 小時`, `${pn.calls ?? 0} 次`], ["錯誤", String(pn.errors ?? 0)]]);
   const q = s.quota ?? {};
   line("限流帳本", "manual", null, [["24 小時記了", `${q.hits ?? 0} 次`], ["人", String(q.users ?? 0)]]);
-  out.push(box);
+  out.push(card("", "狀態", null, box));
 
   const b = s.builds ?? {};
-  out.push(sec("大家在第幾版", b.latest ? "最新 build " + b.latest : ""));
-  const bl = el("section", "sys");
+  const bl = el("div", "blds");
   const dist = b.dist ?? [];
   const mx = Math.max(1, ...dist.map((x) => x.n));
   dist.forEach((x) => {
-    const r = el("div", "bld");
     const k = el("span", "k" + (x.build === b.latest ? " cur" : x.build == null ? " nr" : ""), x.build == null ? "沒回報過" : "build " + x.build);
     const tr = el("div", "tr"); const fl = el("span", "fl" + (x.build === b.latest ? "" : x.build == null ? " nr" : " old")); fl.style.width = (x.n / mx * 100) + "%"; tr.append(fl);
-    put(r, k, tr, el("span", "n", String(x.n)));
-    bl.append(r);
+    put(bl, put(el("div", "bld"), k, tr, el("span", "n", String(x.n))));
   });
-  out.push(bl);
-
-  out.push(sec("倉庫"));
-  const sto = el("section", "sys");
+  const sto = el("div", "stos");
   const order = ["memory", "live", "avatars", "evidence", "total"];
   [...(s.storage ?? [])].sort((a, z) => order.indexOf(a.k) - order.indexOf(z.k)).forEach((x) =>
     put(sto, put(el("div", "store"), el("span", null, STORE_NAME[x.k] ?? x.k), el("span", "c", `${x.n} 個`), el("span", "c", fmtBytes(x.bytes)))));
-  out.push(sto);
+  out.push(put(el("div", "grid2"), card("", "大家在第幾版", b.latest ? "最新 build " + b.latest : null, bl), card("", "倉庫", null, sto)));
 
-  out.push(sec("看不到的"));
-  const bd = el("section", "blind");
+  const bd = el("div", "blind");
   [["最近一次打開 App", " 沒在記。「最近有動作」是開揪、加入、按過東西的時間。"],
    ["聊天", " 散場 48 小時後清掉,只剩結晶那一刻記的句數。"],
    ["閃退", " 在 Sentry,這裡沒有。"]].forEach(([b1, t]) => bd.append(put(el("p"), el("b", null, b1), document.createTextNode(t))));
-  out.push(bd);
+  out.push(card("blindc", "看不到的", null, bd));
   return out;
 }
 
 /* ══ 抽屜:一個人 ══
    從檢舉打開(report)＝處理檢舉,看得到他最近揪的標題(伺服器也只對被檢舉過的人給);
-   從「人」打開(person)＝只有場數,不畫揪的標題(隱私頁:統計不含內容)。 */
-function scrim() { const s = el("div", "scrim" + (S.drawer ? " on" : "")); s.onclick = () => { S.drawer = null; render(); }; return s; }
-function drawerView() {
-  const d = el("aside", "drawer" + (S.drawer ? " on" : "")); d.setAttribute("aria-label", "一個人");
-  if (!S.drawer) return d;
+   從「人」打開(person)＝只有場數,不畫揪的標題(隱私頁:統計不含內容)。
+   ⚠️ 外殼(暗幕＋抽屜)常駐在 body、不跟著整頁重畫 —— 每次重畫都換新節點的話,滑進滑出的過場永遠演不出來
+      (442 版就是這樣:抽屜直接跳出來)。內容每次重填。 */
+let opener = null;
+function openPerson(id, mode) {
+  if (!S.drawer) opener = document.activeElement?.dataset?.k ?? null;
+  S.drawer = { id, mode }; S.bell = false; render(); loadPerson(id);
+}
+function closeDrawer() { S.drawer = null; render(); }
+let drawerEl = null, scrimEl = null;
+function syncDrawer() {
+  if (!drawerEl) {
+    scrimEl = el("div", "scrim"); scrimEl.onclick = () => closeDrawer();
+    drawerEl = el("aside", "drawer");
+    [["role", "dialog"], ["aria-modal", "true"], ["aria-labelledby", "drw-h"]].forEach(([k, v]) => drawerEl.setAttribute(k, v));
+    document.body.append(scrimEl, drawerEl);
+  }
+  const was = drawerEl.classList.contains("on");
+  const on = !!S.drawer && S.auth === "ok";
+  scrimEl.classList.toggle("on", on); drawerEl.classList.toggle("on", on);
+  const app = root.querySelector(".app"); if (app) app.inert = on;
+  if (on) {
+    /* 內容每次重填(資料讀回來也會)—— 焦點原本在抽屜裡就留在同一顆,剛打開就放在「關上」 */
+    const inside = drawerEl.contains(document.activeElement) ? (document.activeElement.dataset?.k ?? "close") : null;
+    drawerEl.replaceChildren(...drawerBody());
+    if (!was || inside) drawerEl.querySelector(`[data-k="${CSS.escape(inside ?? "close")}"]`)?.focus({ preventScroll: true });
+  } else if (was) {
+    if (opener) root.querySelector(`[data-k="${CSS.escape(opener)}"]`)?.focus({ preventScroll: true });
+    opener = null;
+  }
+}
+/* 讀屏的播報:處理完的結果照舊寫在原地(畫面上),這裡只是讓看不到畫面的人也聽得到 —— 不是會消失的提示條 */
+let liveEl = null;
+function say(t) {
+  if (!t) return;
+  if (!liveEl) { liveEl = el("div", "sr"); liveEl.setAttribute("role", "status"); document.body.append(liveEl); }
+  liveEl.textContent = "";
+  setTimeout(() => { liveEl.textContent = t; }, 60);
+}
+function drawerBody() {
   const { id, mode } = S.drawer;
   const P = D.person[id];
   const row = (D.people ?? []).find((x) => x.id === id);
   const u = P?.user ?? (row ? { name: row.name, handle: row.handle, banned: row.banned, until: row.until, gone: row.gone } : {});
-  const x = el("button", "close"); x.setAttribute("aria-label", "關上"); x.append(icon(I_X, 18)); x.onclick = () => { S.drawer = null; render(); };
-  const sub = el("div", "ph"); put(sub, u.handle ? el("span", "hd", "@" + u.handle) : null, personTag(u) || stTag("ok", "正常"));
-  put(d, x, el("h3", null, u.name ?? "(查不到名字)"), sub);
-  if (P?.error) { d.append(el("div", "done red", "讀不到:" + P.error)); return d; }
-  const bans = (P?.bans ?? []);
+  const x = el("button", "close"); x.dataset.k = "close"; x.setAttribute("aria-label", "關上"); x.append(icon(I_X, 18)); x.onclick = () => closeDrawer();
+  const h = el("h3", null, u.name ?? "(查不到名字)"); h.id = "drw-h";
+  const out = [x, h, put(el("div", "ph"), u.handle ? el("span", "hd", "@" + u.handle) : null, personTag(u) || stTag("ok", "正常"))];
+  if (P?.error) { out.push(el("div", "done red", "讀不到:" + P.error)); return out; }
+  const bans = P?.bans ?? [];
   const f = el("div", "facts");
   const facts = mode === "report" || !row
     ? [[P?.reporters_30d ?? "—", "30 天內檢舉他的人"], [P?.reports_total ?? "—", "被檢舉共幾筆"], [P ? bans.filter((b) => b.kind === "user_banned").length : "—", "停過幾次"]]
     : [[row.friends ?? 0, "朋友"], [row.hosted ?? 0, "開過的揪"], [row.joined ?? 0, "參加過"], [row.met ?? 0, "見到面"],
        [buildNum(row.build) ?? "—", "版本"], [row.push ? "開著" : "沒開", "推播"], [md(row.since), "加入"], [row.by_name ?? "—", "被誰帶進來"], [row.brought ?? 0, "帶進來的人"]];
   facts.forEach(([n, l]) => put(f, put(el("div"), el("b", null, String(n)), el("span", null, l))));
-  d.append(f);
-  if (!P) { d.append(el("p", "loading", "讀取中…")); return d; }
+  out.push(f);
+  if (!P) { out.push(el("p", "loading", "讀取中…")); return out; }
 
   const reps = P.reports ?? [];
   if (mode === "report" || reps.length) {
-    d.append(sec("被檢舉的紀錄", `${reps.length} 筆`));
+    out.push(sec("被檢舉的紀錄", `${reps.length} 筆`));
     const tl = el("div", "tl");
     reps.forEach((h) => put(tl, put(el("div", "tli"),
       put(el("div", "l1"), el("b", null, reasonText(h.reason)), el("span", null, `${h.reporter_name ?? "(查不到名字)"} 檢舉`),
         h.open ? stTag("warm", "待處理") : stTag("mute", h.auto_closed ? "自動" : "人工"), el("span", "mono", md(h.created_at))),
       !h.open && h.handled_note ? el("div", "nt", `「${h.handled_note}」`) : null)));
-    d.append(reps.length ? tl : el("p", "empty", "沒有。"));
+    out.push(reps.length ? tl : el("p", "empty", "沒有。"));
   }
   if (mode === "report" || bans.length) {
-    d.append(sec("停權紀錄", `${bans.filter((b) => b.kind === "user_banned").length} 次`));
+    out.push(sec("停權紀錄", `${bans.filter((b) => b.kind === "user_banned").length} 次`));
     const bl = el("div", "tl");
     bans.forEach((b) => {
       const what = b.kind === "user_banned" ? (b.days == null ? "永久停權" : `停權 ${b.days} 天`) : b.kind === "user_unbanned" ? "解封" : "到期解開";
       put(bl, put(el("div", "tli"), put(el("div", "l1"), el("b", null, what), el("span", "mono", mdhm(b.at))), b.note ? el("div", "nt", `「${b.note}」`) : null));
     });
-    d.append(bans.length ? bl : el("p", "empty", "沒有停過。"));
+    out.push(bans.length ? bl : el("p", "empty", "沒有停過。"));
   }
   if (mode === "report") {
-    d.append(sec("最近的揪"));
+    out.push(sec("最近的揪"));
     const acts = P.acts ?? [];
     const al = el("div", "tl");
     const ROLE = { host: ["ok", "主揪"], joined: ["mute", "參加"], left: ["mute", "不去了"] };
     acts.forEach((a) => { const [c, t] = ROLE[a.role] ?? ["mute", a.role]; put(al, put(el("div", "tli"), put(el("div", "l1"), el("b", null, `「${a.title ?? ""}」`), stTag(c, t), el("span", "mono", md(a.start_at))))); });
-    d.append(acts.length ? al : el("p", "empty", "沒有。"));
+    out.push(acts.length ? al : el("p", "empty", "沒有。"));
   } else if (!reps.length && !bans.length) {
-    d.append(sec("檢舉與停權"), el("p", "empty", "沒有被檢舉過,也沒有停過。"));
+    out.push(sec("檢舉與停權"), el("p", "empty", "沒有被檢舉過,也沒有停過。"));
   }
-  return d;
+  return out;
 }
 
 /* ══ 登入 ══ */
@@ -790,7 +899,7 @@ function loginView() {
     if (S.enroll) {
       const q = el("div", "qr");
       if (S.enroll.qr) { const img = el("img"); img.src = S.enroll.qr; img.alt = "驗證器要掃的條碼"; q.append(img); }
-      put(c, el("p", null, "用驗證器 App 掃這個"), q, S.enroll.secret ? el("p", "secret", S.enroll.secret) : null, field, err, go2);
+      put(c, el("p", "lp", "用驗證器 App 掃這個"), q, S.enroll.secret ? el("p", "secret", S.enroll.secret) : null, field, err, go2);
     } else {
       put(c, field, err, go2);
     }

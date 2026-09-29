@@ -4,19 +4,21 @@
   ⚠️ 原稿在揪起來主 repo 的 admin-web/,公開 repo 只是它的一份拷貝(scripts/publish-admin-web.sh 同步)——
      要改就改主 repo 那份,探針(scripts/adminwebprobe.mjs)只看得到那一份。
   ⚠️ 下面那一行 Content-Security-Policy 是這一頁的第二道牆:只准載自己的程式(不准任何外連的腳本)、
-     只准連我們的 Supabase、圖只准自己／data:／證據檔的限時網址。GitHub Pages 送不了回應標頭,只能寫在這裡;
+     只准連我們的 Supabase、圖只准自己／data:／證據檔的限時網址、字型只准自己的(nunito.woff2,445 起)。GitHub Pages 送不了回應標頭,只能寫在這裡;
      frame-ancestors 寫在 meta 裡無效,被嵌進別頁的那一條在 app.js(FRAMED)擋。
 -->
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: https://tfnawvhjpbrqjmaniilm.supabase.co; connect-src https://tfnawvhjpbrqjmaniilm.supabase.co; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: https://tfnawvhjpbrqjmaniilm.supabase.co; connect-src https://tfnawvhjpbrqjmaniilm.supabase.co; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex,nofollow">
 <meta name="color-scheme" content="light">
+<meta name="theme-color" content="#F3EAE4">
 <title>揪起來後台</title>
 <link rel="icon" href="data:,">
+<link rel="preload" href="nunito.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <script type="module" src="app.js"></script>
 </head>
