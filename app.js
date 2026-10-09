@@ -1,6 +1,7 @@
-// 揪起來後台(第四百四十二輪起;第四百四十五輪換成「奶霜」)—— 畫面。
-// 樣子照 Francis 09-29 從第三輪三版挑的一 奶霜(https://claude.ai/artifact/S5vVZw91eVWgZVmDJ2mrq5 第一版):
-// 奶油底、黏土卡、數字壓在兩道波浪上(波浪＝註冊過／那週活躍的人)。442 的骨架(登入、四關、讀資料、四個動作)沒動,只換「怎麼畫」。
+// 揪起來後台(第四百四十二輪起;445 換成「奶霜」;第四百七十四輪換成 Synthex「三 深色頂帶」)—— 畫面。
+// 樣子照 Francis 10-09 從第四輪(照 Dribbble「Synthex UI – Analytics SaaS Dashboard」)三版挑的三,再加他挑的「每週的揪」乙 成對細條
+// (定稿樣品 https://claude.ai/artifact/NL75tSC1beNcpVuSqUfoSH 第三版):頂端一片深藍灰帶子,註冊人數坐在半圓儀表正中間;
+// 帶子底下是淺色毛玻璃卡。442 的骨架(登入、四關、讀資料、四個動作)與 445／453／454 補的(焦點、讀不到、改短、背景工作)沒動,只換「怎麼畫」。
 //
 // 這一支只准「怎麼畫」;「該不該、算成什麼」在 logic.js(探針測得到),登入在 auth.js,資料全部來自
 // supabase/functions/admin(四關的門,_shared/admin.ts)。
@@ -14,7 +15,7 @@ import * as Auth from "./auth.js";
 import {
   reasonText, KIND, BAN_CHOICES, shortenText, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
   growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, matchFiles, qrDataUrl,
-  regCounts, waveSeries, niceScale, monotonePath,
+  regCounts, actGauge, niceScale,
 } from "./logic.js";
 
 /* 被嵌進別人的頁面就什麼都不畫:點擊劫持(把按鈕疊在一個看起來無害的頁面底下騙你按)。
@@ -32,7 +33,7 @@ const S = {
   view: "overview", bell: false, asof: null,
   rtab: "open", sel: null, rdetail: false, fog: true, ask: null, days: null, busy: false, shorten: null, banNote: "",
   q: "", pf: "all", drawer: null,
-  done: {}, err: {}, actErr: null,
+  done: {}, err: {}, actErr: null, loading: false,
 };
 const D = { bell: null, overview: null, people: null, feedback: null, system: null, queue: null, banned: null, report: {}, person: {} };
 const VIEWS = ["overview", "reports", "people", "feedback", "system"];
@@ -49,15 +50,8 @@ const icon = (d, size = 16) => {
   const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); s.append(p); return s;
 };
 const I_SEARCH = "M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14zM20 20l-4-4", I_BACK = "M15 5l-7 7 7 7", I_X = "M6 6l12 12M18 6L6 18",
-  I_GO = "M9 5l7 7-7 7", I_BELL = "M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2 2 0 0 0 4 0";
-/* 左邊選單:分頁、名字、圖示(一條線畫的,同一個粗細) */
-const NAV = [
-  ["overview", "總覽", "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"],
-  ["reports", "檢舉", "M5 21V4M5 4h12l-2.5 4.5L17 13H5"],
-  ["people", "人", "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2.5 20a6.5 6.5 0 0 1 13 0M16 3.6a4 4 0 0 1 0 7.3M21.5 20a6.5 6.5 0 0 0-4-6"],
-  ["feedback", "回饋", "M4 5h16v11H9.5L5 20v-4H4z"],
-  ["system", "系統", "M3 12h4l3-8 4 16 3-8h4"],
-];
+  I_GO = "M9 5l7 7-7 7", I_BELL = "M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16zM10 20.5a2 2 0 0 0 4 0",
+  I_REFRESH = "M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6", I_OUT = "M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10";
 const sec = (t, n) => put(el("h2", "sec"), el("span", null, t), n ? el("i", null, n) : null);
 const card = (cls, title, meta, ...kids) => put(el("section", "card " + (cls || "")),
   title ? put(el("header", "ch"), el("h2", null, title), meta ? el("span", "cm", meta) : null) : null, ...kids);
@@ -168,7 +162,9 @@ async function loadAll(force = false) {
 async function refresh() {
   D.report = {}; D.person = {};
   S.done = {}; S.actErr = null;
-  await Promise.all([loadBell(), loadView(S.view, true)]);
+  /* 頂帶那顆重新整理的圖示在讀的時候轉(按了有反應;成功就安靜地停,不出提示條) */
+  S.loading = true; render();
+  try { await Promise.all([loadBell(), loadView(S.view, true)]); } finally { S.loading = false; render(); }
   if (S.view === "reports" && S.sel && S.rdetail) loadReport(S.sel, true);
 }
 async function loadReport(id, force = false) {
@@ -198,6 +194,7 @@ function go(view, opts = {}) {
 }
 
 /* ══ 畫 ══ */
+let lastView = null;
 function render() {
   if (FRAMED) return;
   /* ⚠️ 整頁每次都整個重畫 —— 焦點原本在哪顆鈕,重畫後就掉回 body,用鍵盤的人每按一下都要從頭 Tab(445 稽核抓到)。
@@ -206,28 +203,66 @@ function render() {
   root.textContent = "";
   if (S.auth === "boot") { root.append(el("p", "loading", "讀取中…")); syncDrawer(); return; }
   if (S.auth !== "ok") { root.append(loginView()); syncDrawer(); return; }
-  root.append(put(el("div", "app"), rail(), mainView()));
+  if (S.view !== lastView) { if (lastView) cue("view"); lastView = S.view; }
+  /* 深色那一片＝頂端那一列＋(總覽才有的)註冊人數儀表與這週四個數;其他頁只剩那一列(.slim)。
+     總覽的資料還沒到也先畫儀表的殼 —— 不然資料一到,帶子從一條長成一大片、整頁往下跳。讀不到(S.err)就只留那一列。 */
+  const withHero = S.view === "overview" && !S.err.overview;
+  const band = put(el("div", "deckband" + (withHero ? "" : " slim")), deck());
+  if (withHero) band.append(heroDark(D.overview));
+  root.append(put(el("div", "app"), band, mainView()));
   syncDrawer();
+  placeTabs();
   if (fk && !S.drawer) (root.querySelector(`[data-k="${CSS.escape(fk)}"]`) ?? document.getElementById(fk))?.focus({ preventScroll: true });
 }
 
-function rail() {
-  const r = el("nav", "rail"); r.setAttribute("aria-label", "後台");
+/* ══ 外框:深色頂帶裡的那一列(第四百七十四輪;以前是左邊一條選單)══
+   選中那頁＝薄荷膠囊。同一排字疊兩層:底下那層淺字是真的按鈕、上面那層薄荷底深字只露出選中那一格(clip-path);
+   換頁時只有露出的那一格滑過去 —— 底色與字色是同一塊被揭開,不會一個先到一個後到(Emil 的做法;第四輪樣品驗過)。 */
+const NAV = [["overview", "總覽"], ["reports", "檢舉"], ["people", "人"], ["feedback", "回饋"], ["system", "系統"]];
+function deck() {
+  const re = iconBtn(I_REFRESH, "重新整理", "refresh", () => refresh());
+  if (S.loading) { re.classList.add("spin"); re.setAttribute("aria-busy", "true"); }
   const b = el("div", "brand", "揪起來"); b.append(el("small", null, "後台"));
-  const t = el("div", "tabs");
+  return put(el("header", "deck"), b, tabs(),
+    put(el("div", "right"), S.asof ? el("span", "asof", S.asof) : null, re, bellView(), iconBtn(I_OUT, "登出", "logout", () => logout())));
+}
+function tabs() {
+  const rail = el("div", "tabrail");
+  const real = el("div", "tabs"), lit = el("div", "tabs lit"); lit.setAttribute("aria-hidden", "true");
   /* 檢舉那一格帶待處理的筆數 —— 讀鈴鐺的(每一頁都會讀),不讀 queue(只有切到檢舉才讀) */
   const open = Number(D.bell?.open_reports) || 0;
-  NAV.forEach(([id, label, d]) => {
-    const x = el("button"); x.dataset.k = "nav-" + id; if (S.view === id) x.setAttribute("aria-current", "page");
-    put(x, icon(d, 18), el("span", "lb", label), id === "reports" && open ? el("span", "pip", String(open)) : null);
-    x.onclick = () => go(id); t.append(x);
+  NAV.forEach(([id, label]) => {
+    const face = () => [el("span", "lb", label), id === "reports" && open ? el("span", "pip", String(open)) : null];
+    const x = put(el("button", "tab"), ...face()); x.dataset.k = "nav-" + id; if (S.view === id) x.setAttribute("aria-current", "page");
+    x.onclick = () => go(id); real.append(x);
+    lit.append(put(el("span", "tab"), ...face()));
   });
-  return put(r, b, t, footBits("rail-foot"));
+  const nav = put(el("nav", "tabw"), put(rail, real, lit)); nav.setAttribute("aria-label", "後台");
+  return nav;
 }
+/* render 之後量選中那格,把上面那層剪到那裡。上一次剪在哪記著:換了頁才從舊位置滑到新位置,其他重畫一律直接貼上。
+   ⚠️ 上面那層每次重畫都是新節點,CSS 預設剪成全藏 —— 不先「不帶過場地貼到舊位置」的話,每按一下鈴鐺膠囊都會從左邊重新掃出來。
+   字型晚到、視窗變寬窄也會改位置 —— 那兩種直接貼過去(instant)。 */
+let litAt = null;
+function placeTabs(instant = false) {
+  const rail = root.querySelector(".tabrail"); if (!rail) return;
+  const on = rail.querySelector(".tabs:not(.lit) [aria-current=page]"), lit = rail.querySelector(".lit");
+  if (!on || !lit) return;
+  const l = on.offsetLeft, r = rail.offsetWidth - l - on.offsetWidth;
+  const to = `inset(0 ${r}px 0 ${l}px round 999px)`, from = instant || !litAt ? to : litAt;
+  lit.style.transition = "none"; lit.style.clipPath = from; void lit.offsetWidth; lit.style.transition = "";
+  if (from !== to) lit.style.clipPath = to;
+  litAt = to;
+}
+document.fonts?.ready.then(() => placeTabs(true));
+function iconBtn(d, label, k, fn) {
+  const b = el("button", "iconbtn"); b.dataset.k = k; b.setAttribute("aria-label", label); b.title = label; b.append(icon(d, 18)); b.onclick = fn; return b;
+}
+async function logout() { await Auth.logout(); S.auth = "login"; S.loginErr = null; S.drawer = null; render(); }
 function footBits(cls) {
   const f = el("div", cls);
   const re = el("button", "linkbtn ink", "重新整理"); re.onclick = () => refresh();
-  const lo = el("button", "linkbtn", "登出"); lo.onclick = async () => { await Auth.logout(); S.auth = "login"; S.loginErr = null; S.drawer = null; render(); };
+  const lo = el("button", "linkbtn", "登出"); lo.onclick = () => logout();
   return put(f, S.asof ? el("span", "asof", S.asof) : null, re, lo);
 }
 
@@ -243,7 +278,6 @@ function top(title, n, withSearch) {
     inp.oninput = () => { S.q = inp.value; const box = root.querySelector("[data-list]"); if (box) box.replaceWith(S.view === "people" ? peopleTable() : S.rtab === "handled" ? handledList() : queueList()); };
     s.append(inp); t.append(s);
   }
-  t.append(bellView());
   return t;
 }
 
@@ -253,14 +287,14 @@ function bellView() {
   const b = el("button", "bell"); b.dataset.k = "bell"; b.setAttribute("aria-label", items.length ? `${items.length} 件要處理` : "沒有要處理的事");
   b.setAttribute("aria-expanded", String(S.bell));
   b.append(icon(I_BELL, 21)); if (items.length) b.append(el("span", "pip", String(items.length)));
-  b.onclick = (e) => { e.stopPropagation(); S.bell = !S.bell; render(); };
+  b.onclick = (e) => { e.stopPropagation(); if (!S.bell) cue("bell"); S.bell = !S.bell; render(); };
   w.append(b);
   if (S.bell) {
     const pop = el("div", "pop"); pop.onclick = (e) => e.stopPropagation();
     pop.append(el("p", "ph2", "要處理的"));
     if (!items.length) put(pop, put(el("div", "calm"), el("span", "dot green"), el("span", null, "沒有要處理的事")));
-    items.forEach((it) => {
-      const r = el("button", "trow"); const tx = el("span", "tx", it.text); if (it.sub) tx.append(el("small", null, it.sub));
+    items.forEach((it, i) => {
+      const r = el("button", "trow"); r.dataset.k = "bell-" + i; const tx = el("span", "tx", it.text); if (it.sub) tx.append(el("small", null, it.sub));
       put(r, el("span", "dot " + it.dot), tx, icon(I_GO, 18));
       r.onclick = () => {
         go(it.go.view, it.go);
@@ -268,6 +302,7 @@ function bellView() {
       };
       pop.append(r);
     });
+    play(pop, "bell", 240, "enter");
     w.append(pop);
   }
   return w;
@@ -275,7 +310,8 @@ function bellView() {
 document.addEventListener("click", () => { if (S.bell) { S.bell = false; render(); } });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (S.bell) { S.bell = false; render(); } else if (S.drawer) closeDrawer();
+  /* 鈴鐺那張關掉時,焦點放回鈴鐺(不然焦點跟著那一列一起被拆掉,掉回 body;474 收尾兩份審查都抓到) */
+  if (S.bell) { S.bell = false; render(); root.querySelector('[data-k="bell"]')?.focus(); } else if (S.drawer) closeDrawer();
 });
 
 function mainView() {
@@ -283,7 +319,7 @@ function mainView() {
   const wrap = el("div", "wrap v-" + S.view);
   const body = { overview, reports, people, feedback, system }[S.view]();
   put(wrap, ...body, footBits("mobile-foot"));
-  if (S.view === "overview" && D.overview) intro(wrap);
+  play(wrap, "view", 260, "enter");
   return put(m, wrap);
 }
 function oops(v) {
@@ -295,97 +331,124 @@ function oops(v) {
 /* ⚠️ 讀不到(S.err)的時候只留紅條＋再試一次 —— 同時再印「讀取中…」＝說謊(它不會再讀了;445 收尾審查抓到) */
 const loading = (v) => (S.err[v] ? null : el("p", "loading", "讀取中…"));
 
-/* ══ 開場那一下 ══ 總覽第一次有資料時:波浪從左畫到右、球落到這週。
+/* ══ 動(第四百七十四輪)══ impeccable 定哪裡動、為什麼動 → Emil 定曲線與毫秒(三條曲線在 style.css 的 :root)。
+   一個主角:第一次進總覽,儀表的弧從 0 掃到這週,「N 人這週有動作」那顆膠囊騎在弧的尖端一起走。
+   其他只做交代:圖第一次捲進畫面才從底線長出來;切頁時薄荷膠囊滑過去、內容淡進來;鈴鐺那張從鈴鐺那角長出來;重新整理時圖示轉。
    ⚠️ 整頁每次 render 都整個重畫(鈴鐺、資料陸續到)—— 直接加 class 的話動畫會一直從頭演。
-      所以記住第一次畫的時間,之後重畫就用負的延遲接著演,演完就不再加(樣品上驗過同一招)。 */
-let intro0 = 0;
-function intro(wrap) {
-  const now = performance.now();
-  if (!intro0) intro0 = now;
-  const e = now - intro0;
-  if (e > 2600) return;
-  wrap.classList.add("intro");
-  wrap.style.setProperty("--since", `${-Math.round(e)}ms`);
+      所以記住每一段第一次開演的時間(T0),之後重畫用負的延遲接著演,演完就不再加(445 的 intro 同一招,收成這一支)。 */
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)");
+const T0 = {};
+const cue = (key) => { T0[key] = performance.now(); };
+function play(node, key, dur, cls) {
+  if (T0[key] == null) return false;
+  const e = performance.now() - T0[key];
+  if (e > dur) return false;
+  node.classList.add(cls);
+  node.style.setProperty("--since", `${-Math.round(e)}ms`);
+  return true;
+}
+/** 圖:第一次捲進畫面才長(開頁時在下面的圖,沒人看到就演完了等於沒演)。看到之前先「上膛」:柱子藏在底線下。
+ *  減少動態、或瀏覽器沒有 IntersectionObserver → 直接畫好,不上膛(上膛了沒人解開＝圖永遠是空的)。 */
+const IO = {};
+function onSight(node, key, dur) {
+  if (play(node, key, dur, "grow") || T0[key] != null) return;
+  if (REDUCE.matches || !("IntersectionObserver" in window)) { T0[key] = -1e9; return; }
+  node.classList.add("armed");
+  IO[key]?.disconnect();
+  const io = (IO[key] = new IntersectionObserver((es) => {
+    if (!es.some((x) => x.isIntersecting)) return;
+    io.disconnect(); cue(key); node.classList.remove("armed"); play(node, key, dur, "grow");
+  }, { threshold: 0.3 }));
+  io.observe(node);
 }
 
-/* ══ 總覽 ══ */
+/* ══ 總覽 ══ 註冊人數與這週四個數住在頂帶(heroDark,render 放的);這裡是帶子底下的三張卡,一張一整排。 */
 function overview() {
   const ov = D.overview;
-  const out = [top("總覽"), oops("overview")];
-  if (!ov) {
-    /* 資料還沒到:大卡的殼跟「目前註冊人數」先在,數字的位置先留著 —— 不然資料一到整頁往下跳 */
-    if (!S.err.overview) out.push(put(el("section", "hero wait"), put(el("div", "hv"), el("p", "hl", "目前註冊人數"), el("p", "hn", "\u00a0"), el("div", "hs")), el("div", "wv")), loading("overview"));
-    return out;
-  }
+  /* 這一頁沒有看得到的頁標題(頂帶就是),標題留給讀屏 */
+  const out = [el("h1", "sr", "總覽"), oops("overview")];
+  if (!ov) { out.push(loading("overview")); return out; }
   const rc = regCounts(ov);
-  out.push(put(el("section", "hero"),
-    put(el("div", "hv"), el("p", "hl", "目前註冊人數"), el("p", "hn", rc.now ?? "—"), regChips(rc)), waves(ov)));
-  out.push(sec("這週", md(ov.weeks?.[ov.weeks.length - 1]?.week) + " 起"), kpis(ov));
-  out.push(put(el("div", "grid2"),
-    card("gatec", "驗證", "近 21 天", ...gateRing(ov)),
-    card("", "每週新註冊", rc.ever != null ? `註冊過 ${rc.ever} 人` : null, signupPlot(ov, 170), invites(ov))));
-  out.push(card("", "八週", null, ...weeksPlot(ov)));
+  const su = card("signc", "每週新註冊", rc.ever != null ? `註冊過 ${rc.ever} 人` : null, signupBars(ov), invites(ov));
+  onSight(su, "c-signup", 1700);
+  out.push(card("gatec", "驗證", "近 21 天", gateBody(ov)), su, setsCard(ov));
   return out;
 }
 /* 大數字底下那兩顆:這週新來幾個、刪了帳號幾個。後者是為了讓 10(目前)跟 11(註冊過)對得起來 —— regCounts 檔頭。 */
 function regChips(rc) {
   const w = el("div", "hs");
+  if (!rc) return w;
   put(w, el("span", "chip" + (rc.week > 0 ? " up" : ""), `這週 +${rc.week}`), rc.gone ? el("span", "chip", `刪了帳號 ${rc.gone}`) : null);
   return w;
 }
-/* 兩道波浪:後面藍的＝註冊過、前面桃色＝那週活躍的人(活躍 ≤ 註冊過,所以桃色永遠在下面;兩道之間的空隙＝註冊了但那週沒動的人)。
-   SVG 拉滿整條(preserveAspectRatio none),線用 non-scaling-stroke;球、數字是 HTML(字不會被拉歪)。 */
-function waves(ov) {
-  const w = waveSeries(ov);
-  if (w.length < 2) return null;
-  const reg = w.map((x) => x.reg), act = w.map((x) => x.active);
-  const max = Math.max(1, ...reg, ...act) * 1.25;
-  const W = 1000, H = 1000, X0 = 30, X1 = 900;
-  const px = (i) => X0 + i / (w.length - 1) * (X1 - X0), py = (v) => H - v / max * H;
-  const s = svgBox(W, H, `近 ${w.length} 週:註冊過的人從 ${reg[0]} 到 ${reg[reg.length - 1]},這週活躍的人 ${act[act.length - 1]}`);
-  s.setAttribute("class", "wvs");
-  const defs = svgEl("defs", {});
-  ["wreg", "wact"].forEach((k) => {
-    const lg = svgEl("linearGradient", { id: "wg-" + k, x1: 0, y1: 0, x2: 0, y2: 1 });
-    lg.append(svgEl("stop", { offset: 0, class: "s0" }), svgEl("stop", { offset: 1, class: "s1" }));
-    defs.append(lg);
-  });
-  s.append(defs);
-  [[reg, "wreg"], [act, "wact"]].forEach(([arr, cls]) => {
-    const d = monotonePath(arr.map((v, i) => [px(i), py(v)]));
-    s.append(svgEl("path", { d: `${d} L${X1} ${H} L${X0} ${H} Z`, class: "wa " + cls }));
-    s.append(svgEl("path", { d, class: "we " + cls, "vector-effect": "non-scaling-stroke" }));
-  });
-  const at = (v) => (v / max * 100).toFixed(2) + "%";
-  const ball = el("span", "ball"); ball.style.left = X1 / 10 + "%"; ball.style.bottom = at(reg[reg.length - 1]);
-  const lr = put(el("span", "wl wreg"), el("b", null, String(reg[reg.length - 1])), document.createTextNode("註冊過"));
-  lr.style.bottom = at(reg[reg.length - 1]);
-  const la = put(el("span", "wl wact"), el("b", null, String(act[act.length - 1])), document.createTextNode("這週活躍"));
-  la.style.bottom = at(act[act.length - 1]);
-  const xs = put(el("div", "wx"), el("span", null, md(w[0].week)), el("span", null, "這週"));
-  return put(el("div", "wv"), s, ball, lr, la, xs);
+/* ── 頂帶裡的主角(474,Synthex 三 深色頂帶)── 註冊人數坐在半圓儀表正中間;弧＝這週有動作的人 / 目前註冊(actGauge)。
+   ov 還沒到:只畫儀表的殼、標籤與這週四格的字,數字的位置先留著。 */
+function heroDark(ov) {
+  const nw = narrow(), W = nw ? 360 : 760, H = nw ? 200 : 400, R = nw ? 150 : 330;
+  const rc = ov ? regCounts(ov) : null, g = ov ? actGauge(ov) : { act: 0, now: null, f: 0 };
+  const { s, cx, cy } = gauge({ f: g.f, W, H, r: R, sw: nw ? 10 : 14, label: ov ? `這週有動作 ${g.act} 人,目前註冊 ${g.now ?? "—"} 人` : null });
+  /* 手機上弧小,數字底下再塞兩顆膠囊會頂到弧頂那顆「N 人這週有動作」—— 膠囊搬到儀表底下 */
+  const box = put(el("div", "gbig"), s, put(el("div", "gc"),
+    put(el("div", "hv"), el("p", "hl", "目前註冊人數"), el("p", "hn", ov ? (rc.now ?? "—") : " "), nw ? null : regChips(rc))));
+  if (ov) {
+    /* 弧的兩端寫刻度:0 與目前註冊人數(弧的分母) */
+    const ex = ((cx - R) / W * 100).toFixed(2) + "%";
+    const l = el("span", "gend", "0"), rr = el("span", "gend", g.now ?? "—"); l.style.left = ex; rr.style.right = ex;
+    box.append(l, rr);
+  }
+  if (g.f > 0) {
+    /* 騎士:一個跟弧同心、直徑＝弧的方框,膠囊釘在它最左邊(＝0 那一端),整框轉 f×180° 就到弧的尖端,膠囊自己反轉回來保持正的。
+       弧是 stroke-dasharray 從 0 長到 100(pathLength＝100),長度跟角度成正比 —— 兩邊同一條曲線、同一段時間,所以一路貼著。
+       ⚠️ 不准改成量弧尖的座標、再用 JS 每一格搬 left/top:背景分頁與被節流的框裡 rAF 會掉格,膠囊會落在弧後面。 */
+    const rider = el("div", "rider");
+    Object.assign(rider.style, { left: ((cx - R) / W * 100).toFixed(3) + "%", top: ((cy - R) / H * 100).toFixed(3) + "%", width: (2 * R / W * 100).toFixed(3) + "%", height: (2 * R / H * 100).toFixed(3) + "%" });
+    rider.style.setProperty("--a", (g.f * 180).toFixed(2) + "deg");
+    /* 手機上帶子只比弧寬一點:弧尖靠近兩端時膠囊會凸出畫面被切掉(474 收尾審查算的)—— 依弧尖的左右位置 u(0～1)把膠囊往裡推,
+       最多推自己寬度的 45%。只推字,不動弧;推的是膠囊反轉回正之後的水平方向。 */
+    if (nw) { const u = (1 - Math.cos(Math.PI * g.f)) / 2; rider.style.setProperty("--sx", (u < 0.2 ? (0.2 - u) / 0.2 * 45 : u > 0.8 ? -(u - 0.8) / 0.2 * 45 : 0).toFixed(1)); }
+    rider.append(el("span", "gpill", `${g.act} 人這週有動作`));
+    box.append(rider);
+  }
+  const hero = put(el("section", "hero" + (ov ? "" : " wait")), box, nw ? regChips(rc) : null, kpis(ov));
+  if (ov) { if (T0.intro == null) cue("intro"); play(hero, "intro", 1500, "intro"); }
+  play(hero, "view", 260, "enter");
+  return hero;
 }
+/** 半圓儀表:弧＝ f(0～1,actGauge 算的;只給有分母的數 —— 沒有分母的數字不准畫圈)。 */
+function gauge({ f, W, H, r, sw, label }) {
+  const cx = W / 2, cy = H - 14;
+  const pt = (t) => [cx - r * Math.cos(Math.PI * t), cy - r * Math.sin(Math.PI * t)];
+  const s = svgRoot(W, H, label, "gauge big");
+  const [ex, ey] = pt(1);
+  s.append(svgEl("path", { d: `M${cx - r} ${cy} A${r} ${r} 0 0 1 ${ex.toFixed(1)} ${ey.toFixed(1)}`, class: "gt" }));
+  for (let i = 0; i <= 10; i++) {
+    const a = Math.PI * i / 10, r1 = r + sw * 0.9, r2 = r1 + (i % 5 ? 5 : 10);
+    s.append(svgEl("line", { x1: (cx - r1 * Math.cos(a)).toFixed(1), y1: (cy - r1 * Math.sin(a)).toFixed(1), x2: (cx - r2 * Math.cos(a)).toFixed(1), y2: (cy - r2 * Math.sin(a)).toFixed(1), class: "gk" }));
+  }
+  if (f > 0) {
+    const [px, py] = pt(f);
+    const v = svgEl("path", { d: `M${cx - r} ${cy} A${r} ${r} 0 0 1 ${px.toFixed(2)} ${py.toFixed(2)}`, class: "gv", "stroke-width": sw, pathLength: 100 });
+    /* --c 是開場 sweep 的起點「0 長、--c 空」:空要比整條長(101 > 100)—— 寫 100 的話第二段長度 0 的虛線剛好落在弧尾,
+       圓頭會在弧還沒掃過去之前就先在終點冒一顆點(474 逐格截圖看到的) */
+    v.style.setProperty("--c", "101"); s.append(v);
+  }
+  return { s, cx, cy };
+}
+/* 這週四個數(頂帶底部那條霧玻璃)。資料還沒到:字先在,數字的位置留著。 */
 function kpis(ov) {
   const wrap = el("div", "kpis");
   weekPair(ov).forEach((x, i) => {
-    const d = deltaText(x.now, x.before);
-    put(wrap, put(el("div", "kpi k" + i), el("span", "k", x.k), el("b", null, String(x.now)), el("span", "d " + d.cls, d.text)));
+    const d = ov ? deltaText(x.now, x.before) : { cls: "", text: " " };
+    put(wrap, put(el("div", "kpi k" + i), el("span", "k", x.k), el("b", null, ov ? String(x.now) : " "), el("span", "d " + d.cls, d.text)));
   });
   return wrap;
 }
-/* 驗證:淨增量 / 5(L4 的門檻)畫成一圈 —— 圈是資料,不是裝飾;沒有分母的數字不准畫圈。 */
-function ring(v, of, size = 132, sw = 13) {
-  const r = (size - sw) / 2, c = 2 * Math.PI * r, cx = size / 2, f = Math.max(0, Math.min(1, (Number(v) || 0) / of));
-  const s = svgBox(size, size, `${v ?? "—"} / ${of}`);
-  s.setAttribute("class", "ring"); s.removeAttribute("preserveAspectRatio");
-  s.append(svgEl("circle", { cx, cy: cx, r, class: "rt", "stroke-width": sw }));
-  if (f > 0) {
-    const a = svgEl("circle", { cx, cy: cx, r, class: "ra", "stroke-width": sw, "stroke-dasharray": `${(c * f).toFixed(1)} ${c.toFixed(1)}`, transform: `rotate(-90 ${cx} ${cx})` });
-    a.style.setProperty("--c", c.toFixed(1)); s.append(a);
-  }
-  return put(el("div", "ringw"), s, put(el("div", "rc"), el("b", null, v ?? "—"), el("span", null, "/ " + of)));
-}
-function gateRing(ov) {
+/* 驗證:整寬一張,左邊大數字＋五格(淨增量 / 5,L4 的門檻;儀表已經是頂帶的主角,這裡不畫第二個圈),右邊四道燈。 */
+function gateBody(ov) {
+  const nn = netNew(ov.gate);
+  const big = put(el("div", "h0"), put(el("b", null, nn == null ? "—" : String(nn)), el("span", null, "/ 5")), el("span", "h0l", "場因為 App 才見到面"));
+  const seg = el("div", "seg5"); seg.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 5; i++) seg.append(el("i", i < (Number(nn) || 0) ? "on" : ""));
   const list = el("div", "gates");
   gateRows(ov.gate).forEach((g) => {
     const row = el("div", "gate"); row.title = g.rule;
@@ -393,55 +456,136 @@ function gateRing(ov) {
     put(row, el("span", "dot " + (g.light in { green: 1, yellow: 1, red: 1, invalid: 1, manual: 1 } ? g.light : "manual")), el("span", "nm", g.name), v, stTag(g.cls, g.word));
     list.append(row);
   });
-  return [put(el("div", "h0r"), ring(netNew(ov.gate), 5), el("span", "h0l", "場因為 App 才見到面")), list];
+  return put(el("div", "gx"), put(el("div", "gxl"), big, seg), list);
 }
 
-/* ══ 圖 ══ 格線與刻度用 HTML(字不會被 viewBox 拉歪)、長條與點用 HTML、折線用 SVG(non-scaling-stroke)。 */
+/* ══ 圖 ══ SVG 整張等比縮放(viewBox 固定、寬 100%、高跟著比例走)—— 圓頭與字才不會被拉歪(442/445 的 HTML 長條換掉)。
+   螢幕窄於 760 換一組比較方的 viewBox(跨過那條線才重畫,手機鍵盤彈出不會把輸入框洗掉)。刻度用 logic.js 的 niceScale(不准第二份)。 */
 function legend(items) {
   const lg = el("div", "legend");
   items.forEach(([cls, t]) => put(lg, put(el("span"), el("i", cls), document.createTextNode(t))));
   return lg;
 }
-function svgBox(W, H, label) {
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label);
-  return svg;
-}
 function svgEl(tag, attrs) { const e = document.createElementNS(NS, tag); Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, String(v))); return e; }
-function plot({ labels, bars, line, dots, h = 180, barLabels = false, label }) {
-  const n = Math.max(1, labels.length);
-  const all = [bars?.v, line?.v, dots?.v].filter(Boolean).flat().map(Number).filter(Number.isFinite);
-  /* 長條頭上要寫數字的,留兩成的頭(不然最高那根的數字撞到最上面的刻度) */
-  const { step, max } = niceScale(Math.max(1, ...all) * (barLabels ? 1.2 : 1));
-  const p = el("div", "plot"); p.style.height = h + "px";
-  for (let t = 0; t <= max; t += step) { const g = el("div", "gl" + (t === 0 ? " base" : "")); g.style.bottom = (t / max * 100) + "%"; g.append(el("span", null, String(t))); p.append(g); }
-  const pct = (v) => (Number(v) || 0) / max * 100;
-  if (bars) bars.v.forEach((v, i) => {
+function svgRoot(W, H, label, cls) {
+  const s = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: cls });
+  if (label) { s.setAttribute("role", "img"); s.setAttribute("aria-label", label); } else s.setAttribute("aria-hidden", "true");
+  return s;
+}
+const narrow = () => window.innerWidth < 760;
+let bucket = narrow();
+window.addEventListener("resize", () => { if (narrow() !== bucket) { bucket = narrow(); render(); } else placeTabs(true); });
+const SEL = {}; // 每張圖目前指著哪一週 —— 重畫時留著,不然資料一到、鈴鐺一按,說明卡就跳回這週
+let uid = 0;
+const txt = (x, y, t, cls, anchor, i) => {
+  const e = svgEl("text", { x: x.toFixed(1), y: y.toFixed(1), class: cls }); if (anchor) e.setAttribute("text-anchor", anchor);
+  if (i != null) e.style.setProperty("--i", i);
+  e.textContent = t; return e;
+};
+/** 共用的框:交錯的淡色週欄、虛線格線、右邊刻度、底下日期。字寫在 viewBox 單位裡:窄的圖縮得多,字給大一號,畫出來才差不多 12–14px。 */
+function chartBase({ labels, max, step, W, H, pad, label }) {
+  const [T, R, B, L] = pad, n = labels.length;
+  const pw = W - L - R, ph = H - T - B, cw = pw / n;
+  const x = (i) => L + (i + 0.5) * cw, y = (v) => T + ph - (v / max) * ph;
+  const s = svgRoot(W, H, label, "chart"); s.style.setProperty("--fs", W >= 1000 ? "13.5px" : "16px");
+  for (let i = 0; i < n; i++) s.append(svgEl("rect", { x: L + i * cw + 3, y: 4, width: cw - 6, height: T + ph - 4, rx: 12, class: "col" + (i % 2 ? " alt" : ""), "data-i": i }));
+  for (let t = 0; t <= max; t += step) {
+    s.append(svgEl("line", { x1: L, x2: W - R + 8, y1: y(t), y2: y(t), class: t ? "gl" : "gl base" }));
+    s.append(txt(W - R + 18, y(t) + 4.5, String(t), "tk"));
+  }
+  const thin = narrow() && n > 8;
+  labels.forEach((t, i) => { if (!thin || i % 2 === (n - 1) % 2) s.append(txt(x(i), H - 12, t, "xt" + (i === n - 1 ? " now" : ""), "middle")); });
+  return { s, x, y, cw, L, W, H, n };
+}
+/** 收尾:每一週一塊看不見的感應區,滑過去說明卡就移到那一週;左右鍵也可以。
+ *  說明卡坐在圖上方留的那一條(.chw 的 padding-top)裡,底下一個小尖角指著那一欄。
+ *  ⚠️ 不准再放進圖裡:放在柱子旁邊會蓋住隔壁那一週(他 10-09 截給我的圖裡,08-24 那顆點就被蓋成灰的)。 */
+function finish(g, tip, label, key) {
+  const w = el("div", "chw"); w.tabIndex = 0; w.dataset.k = "chart-" + key; w.setAttribute("role", "group"); w.setAttribute("aria-label", label + "。左右鍵看每一週");
+  w.append(g.s);
+  /* ⚠️ 不准叫 hi:.hi 是「已處理」清單那一列(width:100%),套到 SVG 方塊上會把它撐成整張圖寬(第四輪樣品撞過) */
+  const mark = (i) => g.s.querySelectorAll("[data-i]").forEach((e) => e.classList.toggle("wk", Number(e.dataset.i) === i));
+  const c = el("div", "tip"), caret = el("i", "caret");
+  const big = el("b"), l1 = el("span", "t1"), sub = el("small");
+  put(c, big, put(el("span", "tx"), l1, sub), caret);
+  /* 說明卡不掛 aria-live:滑鼠每滑過一週讀屏就唸一次。改成只有按左右鍵時用 say() 唸(474 收尾審查) */
+  let cur = Math.min(SEL[key] ?? g.n - 1, g.n - 1);
+  const place = () => {
+    const cw = w.clientWidth; if (!cw) return;
+    const cx = (g.x(cur) / g.W) * cw, tw = c.offsetWidth;
+    const left = Math.max(0, Math.min(cw - tw, cx - tw / 2));
+    c.style.transform = `translateX(${left.toFixed(1)}px)`;
+    caret.style.transform = `translateX(${(cx - left).toFixed(1)}px)`;
+  };
+  const show = (i) => {
+    cur = SEL[key] = i; const t = tip(i);
+    big.textContent = t.big; l1.textContent = t.line; sub.textContent = t.sub ?? "";
+    mark(i); place();
+  };
+  /* 第一次量到寬度那一下不准滑(不然每次重畫,說明卡都從最左邊滑過來) */
+  let first = true;
+  new ResizeObserver(() => {
+    if (!first) return place();
+    c.classList.add("still"); place(); void c.offsetWidth; c.classList.remove("still"); first = false;
+  }).observe(w);
+  for (let i = 0; i < g.n; i++) {
+    const r = svgEl("rect", { x: g.L + i * g.cw, y: 0, width: g.cw, height: g.H, class: "hit" });
+    r.addEventListener("pointerenter", () => show(i));
+    r.addEventListener("click", () => show(i));
+    g.s.append(r);
+  }
+  w.onkeydown = (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault(); show(Math.max(0, Math.min(g.n - 1, cur + (e.key === "ArrowLeft" ? -1 : 1))));
+    const t = tip(cur); say([t.big, t.line, t.sub].filter(Boolean).join(" "));
+  };
+  show(cur);
+  w.append(c);
+  return w;
+}
+/** 細圓頭直條:一週一到兩根並排(淺＝第一串、深＝第二串),這週那根最深;頭上寫數字。
+ *  開場:柱子藏在底線後面(剪裁只露出底線以上),從那裡推出來 —— 只動 transform,圓頭一路是圓的。 */
+function bars({ labels, series, tip, label, key, h = 300 }) {
+  if (!labels.length) return el("p", "empty", "還沒有資料。");
+  const nw = narrow(), W = nw ? 420 : 1000, H = nw ? 260 : h, n = labels.length;
+  const { step, max } = niceScale(Math.max(1, ...series.flatMap((x) => x.v)) * 1.3);
+  const g = chartBase({ labels, max, step, W, H, pad: [28, nw ? 40 : 58, 40, 4], label });
+  const floor = g.y(0), id = "fl" + (++uid);
+  const defs = svgEl("defs", {}), cp = svgEl("clipPath", { id }); cp.append(svgEl("rect", { x: 0, y: -60, width: W, height: (floor + 60).toFixed(1) })); defs.append(cp); g.s.prepend(defs);
+  const grp = svgEl("g", { "clip-path": `url(#${id})` }), vals = [];
+  const k = series.length, sw = nw ? 6 : 8, gap = Math.min(15, g.cw * 0.2);
+  series.forEach((ser, j) => ser.v.forEach((v, i) => {
     if (!v) return;
-    const b = el("span", "cbar" + (i === n - 1 ? " now" : "")); b.style.left = `${(i + 0.5 - bars.w / 2) / n * 100}%`; b.style.width = `${bars.w / n * 100}%`; b.style.height = pct(v) + "%";
-    if (barLabels) b.append(el("em", null, String(v)));
-    p.append(b);
-  });
-  const s = svgBox(1000, 1000, label); s.setAttribute("class", "ps");
-  const cx = (i) => (i + 0.5) * 1000 / n, y = (v) => 1000 - pct(v) * 10;
-  if (line) s.append(svgEl("path", { d: line.v.map((v, i) => (i ? "L" : "M") + cx(i) + " " + y(v)).join(" "), class: "ln", "vector-effect": "non-scaling-stroke" }));
-  p.append(s);
-  const dot = (v, i, cls) => { const d = el("span", "pt " + cls); d.style.left = `${(i + 0.5) / n * 100}%`; d.style.bottom = pct(v) + "%"; return d; };
-  if (line) line.v.forEach((v, i) => p.append(dot(v, i, "pl")));
-  if (dots) dots.v.forEach((v, i) => { if (v) p.append(dot(v, i, "pd")); });
-  const xl = el("div", "xl" + (n > 8 ? " thin" : "")); xl.style.gridTemplateColumns = `repeat(${n},1fr)`;
-  labels.forEach((t, i) => xl.append(el("span", i === n - 1 ? "now" : "", t)));
-  return put(el("div", "plotw"), p, xl);
+    const cx = g.x(i) + (j - (k - 1) / 2) * gap, now = i === n - 1 ? " now" : "";
+    const y0 = floor - sw / 2, y1 = Math.min(y0, g.y(v) + sw / 2);
+    /* --h:整根(連上面的圓頭)推到底線後面要走多遠 */
+    grp.append(svgEl("line", { x1: cx.toFixed(1), x2: cx.toFixed(1), y1: y0.toFixed(1), y2: y1.toFixed(1), class: "bar rise " + ser.cls + now, "stroke-width": sw, "data-i": i, style: `--i:${i};--h:${(y0 - y1 + sw).toFixed(1)}px` }));
+    vals.push(txt(cx, g.y(v) - 12, String(v), "bv lab" + now, "middle", i));
+  }));
+  g.s.append(grp, ...vals);
+  return finish(g, tip, label, key);
 }
-function weeksPlot(ov) {
-  const w = ov.weeks ?? [];
-  return [legend([["k-line", "活躍的人"], ["k-bar", "開的揪"], ["k-dot", "見到面"]]),
-    plot({ labels: w.map((x) => md(x.week)), bars: { v: w.map((x) => x.sets ?? 0), w: 0.44 }, line: { v: w.map((x) => x.active ?? 0) },
-      dots: { v: w.map((x) => x.met ?? 0) }, label: "八週的活躍人數、開的揪與見到面" })];
-}
-function signupPlot(ov, h) {
+function signupBars(ov) {
   const g = growthSeries(ov.growth, 12);
-  return plot({ labels: g.map((x) => md(x.week)), bars: { v: g.map((x) => x.n), w: 0.5 }, barLabels: true, h, label: "每週新註冊的人數" });
+  const labels = g.map((x, i) => (i === g.length - 1 ? "這週" : md(x.week)));
+  const tip = (i) => ({ big: `+${g[i].n}`, line: `${i === g.length - 1 ? "這週" : md(g[i].week) + " 那週"}新註冊`, sub: `累計 ${g[i].cum} 人` });
+  return bars({ labels, series: [{ v: g.map((x) => x.n), cls: "pb" }], tip, label: "每週新註冊的人數", key: "signup", h: 240 });
+}
+/* 每週的揪:成對細條(他 10-09 從三種挑的乙)—— 淺＝開的揪、深＝見到面,兩根並排、同一把尺。
+   ⚠️ 不准相減、不准畫成一根裝在另一根裡:sets 照「開的那週」(created_at)、met 照「出發那週」(start_at)算
+      (0063_analytics_v2.sql:161、178),不是同一批揪 ——「開了、沒見到面」算不出來,某一週見到面可以比開的多。
+      第四輪樣品第一版就畫了那個差(斜線區間帶),adminwebprobe §5 釘著。 */
+function setsCard(ov) {
+  const w = ov.weeks ?? [], n = w.length;
+  const labels = w.map((x, i) => (i === n - 1 ? "這週" : md(x.week)));
+  const v = (k) => w.map((x) => Number(x[k]) || 0);
+  const sets = v("sets"), met = v("met"), act = v("active");
+  const when = (i) => (i === n - 1 ? "這週" : `${md(w[i].week)} 那週`);
+  const tip = (i) => ({ big: String(sets[i]), line: `${when(i)}開的揪`, sub: `見到面 ${met[i]} · 活躍的人 ${act[i]}` });
+  const c = card("setsc", "每週的揪", n ? `近 ${n} 週` : null, legend([["k-pa", "開的揪"], ["k-pb", "見到面"]]),
+    bars({ labels, series: [{ v: sets, cls: "pa" }, { v: met, cls: "pb" }], tip, label: `近 ${n} 週開的揪與見到面的場數`, key: "sets", h: 300 }));
+  onSight(c, "c-sets", 1700);
+  return c;
 }
 function invites(ov) {
   const t = ov.totals ?? {};

@@ -166,11 +166,11 @@ export function growthSeries(growth, maxWeeks = 16) {
   return all.slice(-maxWeeks);
 }
 
-/* ── 總覽的主角:目前註冊人數(第四百四十五輪,奶霜)───────────────────
+/* ── 總覽的主角:目前註冊人數(第四百四十五輪起;474 換成 Synthex 深色頂帶的半圓儀表)────────
    他 09-28:「目前註冊人數要是 dashboard 的最上面中間顯示的,最明顯的,最重要的」。 */
 /** 目前＝totals.users(0158 admin_overview 的 totals,只數 deleted_at 是空的);
  *  註冊過＝growth 累計(同一支的 growth,數 public.users 每一列、含刪了帳號的;最後一格永遠是這週 —— generate_series 到 now())。
- *  ⚠️ 兩個數會一起出現在畫面上(大數字 10、波浪終點 11),差的那幾個一定要寫出來(刪了帳號 N),不然像算錯。
+ *  ⚠️ 兩個數會一起出現在畫面上(大數字 10、「每週新註冊」那張卡寫註冊過 11),差的那幾個一定要寫出來(刪了帳號 N),不然像算錯。
  *  ⚠️ 伺服器沒給 totals.users 就是 null(畫「—」),不是 0:0 會讓人以為大家都跑了。 */
 export function regCounts(ov) {
   const g = growthSeries(ov?.growth, Number.MAX_SAFE_INTEGER);
@@ -179,20 +179,16 @@ export function regCounts(ov) {
   const ever = g.length ? g[g.length - 1].cum : null;
   return { now, ever, week: g.length ? g[g.length - 1].n : 0, gone: ever != null && now != null ? Math.max(0, ever - now) : 0 };
 }
-/** 大卡上的兩道波浪:每一週「註冊過(那週為止的累計,含刪了帳號的)」與「那週活躍的人」。
- *  weeks 是 v_weekly 最近 8 週、growth 從第一個人那週起 —— 兩邊的週都是 date_trunc('week') 轉 date 的字串
- *  (0063 v_weekly `wk.w::date as week`、0158 growth `gs::date`),所以用字串對。
- *  ⚠️ 某週 growth 對不到:比 growth 第一週早 → 0(那時還沒有人);不然沿用上一週(不准掉成 0 畫出一道斷崖)。 */
-export function waveSeries(ov) {
+/** 頂帶那個半圓儀表的弧(第四百七十四輪):弧＝這週有動作的人 / 目前註冊人數,弧尖那顆膠囊寫「N 人這週有動作」。
+ *  有動作＝weeks 最後一格的 active(v_weekly 的 active_users,這週開揪、加入、按過東西的人)。
+ *  ⚠️ 只畫有分母的:目前註冊人數不知道(null)或是 0 → 不畫弧(f＝0),不准拿別的數頂替分母。
+ *  ⚠️ active 數的是「那週有動作的帳號」、可能含這週剛刪帳號的人,users 不含 —— 理論上 act 會比 now 多一點點;
+ *     弧夾在 1(滿弧),膠囊上的字照實寫 act(不改數字,只是弧畫不出超過一圈的部分)。 */
+export function actGauge(ov) {
   const w = Array.isArray(ov?.weeks) ? ov.weeks : [];
-  const g = growthSeries(ov?.growth, Number.MAX_SAFE_INTEGER);
-  const cum = new Map(g.map((x) => [String(x.week), x.cum]));
-  let last = 0;
-  return w.map((x) => {
-    const k = String(x.week);
-    last = cum.has(k) ? cum.get(k) : g.length && k < String(g[0].week) ? 0 : last;
-    return { week: x.week, reg: last, active: Number(x.active) || 0 };
-  });
+  const act = Number(w[w.length - 1]?.active) || 0;
+  const now = regCounts(ov).now;
+  return { act, now, f: now ? Math.min(1, act / now) : 0 };
 }
 /** 圖的刻度:最多四格,一格是 1／2／5／10 × 10 的次方,至少 1(人數沒有半個)。max 一定 ≥ 資料最大值。 */
 export function niceScale(m) {
@@ -200,32 +196,6 @@ export function niceScale(m) {
   const step = Math.max(1, [1, 2, 5, 10].map((k) => k * mag).find((s) => s >= raw));
   return { step, max: Math.max(step, Math.ceil((Number(m) || 0) / step) * step) };
 }
-/** 波浪的曲線:單調三次(Fritsch–Carlson)。
- *  ⚠️ 不用 Catmull-Rom 那種「看起來比較圓」的:它在平的一段接著上升的地方會先往下凹再衝過頭 ——
- *     累計人數從來不會往下掉,畫出一個凹就是在說謊。這條保證每一段都夾在兩端的值之間(adminwebprobe 取樣驗)。
- *  pts:[[x, y], …],x 由小到大。回 SVG path 的 d(M … C …)。 */
-export function monotonePath(pts) {
-  const n = Array.isArray(pts) ? pts.length : 0;
-  if (n === 0) return "";
-  const f = (v) => (Math.round(v * 10) / 10).toString();
-  if (n === 1) return `M${f(pts[0][0])} ${f(pts[0][1])}`;
-  const dx = [], s = [], m = [];
-  for (let i = 0; i < n - 1; i++) { dx[i] = pts[i + 1][0] - pts[i][0]; s[i] = dx[i] ? (pts[i + 1][1] - pts[i][1]) / dx[i] : 0; }
-  m[0] = s[0]; m[n - 1] = s[n - 2];
-  for (let i = 1; i < n - 1; i++) m[i] = s[i - 1] * s[i] <= 0 ? 0 : (s[i - 1] + s[i]) / 2;
-  for (let i = 0; i < n - 1; i++) {
-    if (s[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
-    const a = m[i] / s[i], b = m[i + 1] / s[i], h = a * a + b * b;
-    if (h > 9) { const t = 3 / Math.sqrt(h); m[i] = t * a * s[i]; m[i + 1] = t * b * s[i]; }
-  }
-  let d = `M${f(pts[0][0])} ${f(pts[0][1])}`;
-  for (let i = 0; i < n - 1; i++) {
-    const h = dx[i] / 3;
-    d += ` C${f(pts[i][0] + h)} ${f(pts[i][1] + m[i] * h)} ${f(pts[i + 1][0] - h)} ${f(pts[i + 1][1] - m[i + 1] * h)} ${f(pts[i + 1][0])} ${f(pts[i + 1][1])}`;
-  }
-  return d;
-}
-
 /* ── 人 ─────────────────────────────────────────────────────────────── */
 const DAY = 86400000;
 export const buildNum = (b) => (typeof b === "string" && /^\d+$/.test(b) ? Number(b) : null);
