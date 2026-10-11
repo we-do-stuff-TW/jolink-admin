@@ -31,7 +31,7 @@ class Shorten extends Error { constructor(current) { super("would_shorten"); thi
 const S = {
   auth: "boot", loginErr: null, factor: null, enroll: null, me: null,
   view: "overview", bell: false, asof: null,
-  rtab: "open", sel: null, rdetail: false, fog: true, ask: null, days: null, busy: false, shorten: null, banNote: "",
+  rtab: "open", sel: null, rdetail: false, fog: true, ask: null, days: null, busy: false, shorten: null, noteDraft: "",
   q: "", pf: "all", drawer: null,
   done: {}, err: {}, actErr: null, loading: false,
 };
@@ -258,6 +258,8 @@ document.fonts?.ready.then(() => placeTabs(true));
 function iconBtn(d, label, k, fn) {
   const b = el("button", "iconbtn"); b.dataset.k = k; b.setAttribute("aria-label", label); b.title = label; b.append(icon(d, 18)); b.onclick = fn; return b;
 }
+/* 登出／換帳號只有這一支(第二十四次健檢 D18-6:🪦 以前登入畫面那兩顆「換一個帳號」各自抄一份,而且沒清 S.drawer ——
+   今天在登入畫面抽屜不畫、無害,但下一個人在這裡加一格狀態只會記得改一份)。 */
 async function logout() { await Auth.logout(); S.auth = "login"; S.loginErr = null; S.drawer = null; render(); }
 function footBits(cls) {
   const f = el("div", cls);
@@ -669,7 +671,7 @@ function detailPane() {
     return pane;
   }
   const acts = el("div", "acts");
-  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.shorten = null; S.banNote = ""; S.actErr = null; render(); }; return b; };
+  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.shorten = null; S.noteDraft = ""; S.actErr = null; render(); }; return b; };
   put(acts, mk("看過了", "solid", "handle"), mk("停權", "danger", "ban"),
     r.target_type === "message" && r.message_live ? mk("把這則拿掉", "line", "remove") : null);
   pane.append(acts);
@@ -723,17 +725,22 @@ function fileNode(f, small) {
 function askBox(key, r) {
   const box = el("div", "ask");
   const note = el("input"); note.type = "text"; note.placeholder = "寫一句理由"; note.setAttribute("aria-label", "理由"); note.id = "note-" + key; note.maxLength = 500;
+  /* 整頁重畫會重做這個輸入框(報告讀回來、被擋回來、別處 render 都算)—— 打到一半的理由住 S.noteDraft,
+     重畫時放回去(一次只開一個框,所以一格就夠)。第二十四次健檢 D18-2:🪦 以前只有停權被擋回來那一下存 S.banNote,
+     「看過了」那格、或報告還沒讀回來就先打字的停權理由,一重畫字就沒了(焦點被放回同 id 的框,看起來游標還在)。 */
+  if (S.noteDraft) note.value = S.noteDraft;
+  const keep = () => { S.noteDraft = note.value; };
   const id = r.id;
   const act = async (btn, fn) => {
     if (S.busy) return; S.busy = true; btn.disabled = true; S.actErr = null;
-    try { await fn(); S.ask = null; }
+    try { await fn(); S.ask = null; S.noteDraft = ""; }
     catch (e) { if (!(e instanceof Stop)) S.actErr = e.message; }
     finally { S.busy = false; }
     render();
     say(S.actErr || S.done[id]?.text || "");
   };
   if (key === "handle") {
-    const g = el("button", "btn solid", "確定"); g.disabled = true; note.oninput = () => { g.disabled = !note.value.trim(); };
+    const g = el("button", "btn solid", "確定"); g.disabled = !note.value.trim(); note.oninput = () => { keep(); g.disabled = !note.value.trim(); };
     g.onclick = () => act(g, async () => {
       const t = note.value.trim();
       const res = await api("handle", { id, note: t });
@@ -750,20 +757,18 @@ function askBox(key, r) {
       b.onclick = () => { S.days = c.days; if (S.shorten) { S.shorten = null; render(); return; } chips.forEach((x, i) => x.setAttribute("aria-pressed", String(BAN_CHOICES[i].days === c.days))); check(); };
       days.append(b); return b;
     });
-    /* 整頁重畫會重做這個輸入框:被擋回來那一下,剛打的理由要還在(S.banNote) */
-    if (S.banNote) note.value = S.banNote;
-    note.oninput = check;
+    note.oninput = () => { keep(); check(); };   // 理由的草稿怎麼留,見 askBox 開頭那段
     /* 會不會提早放人只問資料庫(0163 admin_ban);被擋回來(Shorten)就把確認那一行畫出來,不當成錯誤。 */
     const send = (btn, shorten) => act(btn, async () => {
       const t = note.value.trim(), c = BAN_CHOICES.find((x) => x.days === S.days);
-      S.banNote = t;
+      S.noteDraft = t;
       try {
         await api("ban", { id, target: r.target_id, note: t, days: S.days, ...(shorten ? { shorten: true } : {}) });
       } catch (e) {
         if (e instanceof Shorten) { S.shorten = { id, current: e.current }; throw new Stop(); }
         throw e;
       }
-      S.shorten = null; S.banNote = "";
+      S.shorten = null; S.noteDraft = "";
       S.done[id] = { text: `${r.target_name ?? ""} ${c?.days === "forever" ? "永久停權" : "停權 " + c?.label}:「${t}」`, red: true };
       await afterWrite(id);
     });
@@ -774,7 +779,7 @@ function askBox(key, r) {
       const y = el("button", "btn danger", "改短"); y.dataset.k = "ban-shorten";
       const n = el("button", "btn", "先不要"); n.dataset.k = "ban-keep";
       y.onclick = () => send(y, true);
-      n.onclick = () => { S.shorten = null; S.banNote = ""; S.ask = null; render(); };
+      n.onclick = () => { S.shorten = null; S.noteDraft = ""; S.ask = null; render(); };
       put(box, el("p", "q", shortenText(S.shorten.current, c?.label ?? "")), put(el("div", "row"), y, n));
     }
     check();
@@ -789,8 +794,14 @@ function askBox(key, r) {
   }
   return box;
 }
-async function afterWrite(id) {
+/* 寫進去之後重讀清單(鈴鐺＋檢舉那頁)。⚠️ 承諾點之後(家規 §3.5):寫已經成功了,重讀失敗只記在那一頁的錯誤格,
+   **不准往外丟** —— 往外丟就落進動作那顆鈕的 catch,成功被畫成紅字失敗、鈕又能按(第二十四次健檢 D3:解封那條路
+   以前自己寫了一份沒包的 Promise.all,再按一次會多寫一筆 user_unbanned)。「看過了／停權」與「解封」都走這一支。 */
+async function reloadAfterWrite() {
   await Promise.all([loadBell(), (async () => { try { await LOAD.reports(); } catch (e) { if (!(e instanceof Stop)) S.err.reports = e.message; } })()]);
+}
+async function afterWrite(id) {
+  await reloadAfterWrite();
   delete D.report[id];
   D.people = null;
   loadReport(id, true);
@@ -816,7 +827,7 @@ function bannedList() {
           const t = note.value.trim();
           const res = await api("unban", { target: p.id, note: t });
           S.done["unban:" + p.id] = { text: `解封了:「${t}」${res?.reopened ? `,${res.reopened} 筆檢舉重新回到待處理` : ""}` };
-          await Promise.all([loadBell(), LOAD.reports()]);
+          await reloadAfterWrite();
           D.people = null;
         } catch (e) { if (!(e instanceof Stop)) { err.textContent = e.message; err.hidden = false; g.disabled = false; S.busy = false; say(e.message); return; } }
         S.busy = false; render(); say(S.done["unban:" + p.id]?.text ?? "");
@@ -1078,11 +1089,11 @@ function loginView() {
     } else {
       put(c, field, err, go2);
     }
-    const lo = el("button", "linkbtn", "換一個帳號"); lo.onclick = async () => { await Auth.logout(); S.auth = "login"; S.loginErr = null; render(); };
+    const lo = el("button", "linkbtn", "換一個帳號"); lo.onclick = () => logout();
     c.append(lo);
     setTimeout(() => i.focus(), 0);
   } else if (S.auth === "notadmin") {
-    const o = el("button", "btn", "換一個帳號"); o.onclick = async () => { await Auth.logout(); S.auth = "login"; S.loginErr = null; render(); };
+    const o = el("button", "btn", "換一個帳號"); o.onclick = () => logout();
     put(c, el("p", "err", "這個帳號不是管理員。"), o);
   }
   return put(w, c);
