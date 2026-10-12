@@ -15,7 +15,9 @@ export const reasonText = (raw) => {
   const s = String(raw ?? "").trim();
   return REASON[s] ?? s;
 };
-export const KIND = { message: "訊息", user: "這個人" };
+/* 檢舉的層級(reports.target_type)。⚠️ 'activity'(這場揪)第二十五次健檢 K183 起才有人寫(新 build 從揪卡進來;
+   0096 的 CHECK 早就留了這一格)—— 以前揪卡那一筆也記成 'user',後台寫「這個人」。 */
+export const KIND = { message: "訊息", user: "這個人", activity: "這場揪" };
 
 /* 停權能選哪幾種。⚠️ 跟 supabase/functions/_shared/admin.ts 的 BAN_DAYS、_modqueue.mjs、0158 是同一件事的
    第五個地方(瀏覽器載不動那幾支)—— adminwebprobe 把它跟 BAN_DAYS 綁在一起比。 */
@@ -237,6 +239,27 @@ export function chatLines(ev) {
   return [...arr(ctx.before).map((m) => line(m, false)), line(ev, true), ...arr(ctx.after).map((m) => line(m, false))];
 }
 export const hasContext = (ev) => Array.isArray(ev?.context?.before) || Array.isArray(ev?.context?.after);
+/** 揪的快照(第二十五次健檢 K183;submit_report 在檢舉那一刻拍的)→ 後台那一塊要列的幾行 [欄名, 值]。
+ *  不是揪的快照(訊息證據、沒有快照)回 null —— 畫面據此決定走這一塊還是對話那一塊(evidenceView)。
+ *  ⚠️ 值一律原樣(主揪自己打的字不准被「修飾」過再給審核的人看,reasonText 同一條);空的那幾格不列。
+ *  names:admin_report 回的名冊(現在的名字);快照裡的 host_name 是當時的,兩個不一樣就都印。 */
+export function actSnapRows(ev, names = {}) {
+  if (!ev || typeof ev !== "object" || ev.kind !== "activity") return null;
+  const s = (x) => (typeof x === "string" && x.trim() ? x : null);
+  const when = ev.start_at ? `${mdhm(ev.start_at)}${ev.all_day ? " · 全天" : ev.end_at ? " – " + hm(ev.end_at) : ""}` : null;
+  const now = names[ev.host_id] ?? null, then = s(ev.host_name);
+  const host = then && now && now !== then ? `${then}(現在叫 ${now})` : (then ?? now);
+  const rows = [
+    ["標題", s(ev.title) ? `${s(ev.emoji) ? ev.emoji + " " : ""}${ev.title}` : null],
+    ["時間", when],
+    ["地點", s(ev.place_text)],
+    ["簡介", s(ev.description)],
+    ["主揪", host],
+    ["狀態", ev.status === "cancelled" ? "已解散" : null],
+    ["拍下的時間", ev.snapshot_at ? mdhm(ev.snapshot_at) : null],
+  ];
+  return rows.filter(([, v]) => v != null);
+}
 /** 檔名:網址或路徑的最後一段,去掉 ?token。 */
 export const fileNameOf = (u) => {
   const s = String(u ?? "").split("?")[0];

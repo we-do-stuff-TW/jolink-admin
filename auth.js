@@ -77,7 +77,10 @@ export function current() {
 }
 export function clear() { store.del(SESSION); store.del(VERIFIER); }
 
-/** JWT 的內容(不驗簽 —— 只拿來決定「下一步帶你去哪」,真正的判斷在伺服器)。 */
+/** JWT 的內容(不驗簽 —— 只拿來決定「下一步帶你去哪」,真正的判斷在伺服器)。
+ *  ⚠️ 全 repo 拆 JWT 只准一種寫法(第二十五次健檢卡 6):換字＋補等號＋照 UTF-8 解。本尊是
+ *     supabase/functions/_shared/jwt.ts(Deno);這一頁是公開 repo 的靜態檔,import 不到,所以抄 ——
+ *     另一份抄本在邀請網頁 supabase/functions/j/_ui.ts 的 claims。scripts/jwtprobe.mjs 三邊一起驗、掃「不准長出第四份」。 */
 export function claims(token) {
   try {
     const p = String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");

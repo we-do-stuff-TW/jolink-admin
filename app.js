@@ -13,7 +13,7 @@
 import { SUPABASE_URL, PUBLISHABLE_KEY } from "./config.js";
 import * as Auth from "./auth.js";
 import {
-  reasonText, KIND, BAN_CHOICES, shortenText, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
+  reasonText, KIND, BAN_CHOICES, actSnapRows, shortenText, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
   growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, matchFiles, qrDataUrl,
   regCounts, actGauge, niceScale,
 } from "./logic.js";
@@ -663,7 +663,7 @@ function detailPane() {
 
   if (R?.error) pane.append(el("div", "done red", "讀不到這一筆:" + R.error));
   else if (!R) pane.append(el("p", "loading", "讀取中…"));
-  else if (R.evidence) pane.append(...evidenceView(R, r));
+  else if (R.evidence) pane.append(...(actSnapRows(R.evidence, R.names) ? actSnapView(R) : evidenceView(R, r)));
 
   if (S.done[S.sel]) { pane.append(el("div", "done" + (S.done[S.sel].red ? " red" : ""), S.done[S.sel].text)); return pane; }
   if (!r.open) {
@@ -678,6 +678,13 @@ function detailPane() {
   if (S.ask) pane.append(askBox(S.ask, r));
   if (S.actErr) pane.append(el("div", "done red", S.actErr));
   return pane;
+}
+/* 檢舉「這場揪」那一筆:檢舉當下那場的內容(第二十五次健檢 K183)。列哪幾行、怎麼講住 logic.js 的 actSnapRows,這裡只畫。
+   ⚠️ 不霧:這不是私訊,是那一場本來就給受邀的人看的卡片內容。 */
+function actSnapView(R) {
+  const kv = el("dl", "kv");
+  for (const [k, v] of actSnapRows(R.evidence, R.names)) put(kv, el("dt", null, k), el("dd", null, v));
+  return [put(el("div", "evwrap"), put(el("div", "evtools"), el("span", "evh", "證據 · 檢舉當下那一場")), kv)];
 }
 const MEDIA_WORD = { photo: "照片", image: "照片", video: "影片", voice: "語音", audio: "語音", file: "檔案" };
 function evidenceView(R, r) {
