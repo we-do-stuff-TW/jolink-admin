@@ -7,9 +7,10 @@
 //
 // 資料的形狀全部來自 supabase/migrations/0158_admin_console.sql(admin_* 那十支)經 admin 函式轉手。
 
-/* 檢舉理由:App 的選單送的是代碼(personcard／act 那兩個選單),翻回人話。
-   ⚠️ 只翻完全相符的;不認得的原樣印(使用者自己打的字不准被「修飾」過再給審核的人看 —— _modqueue showReason 同一條)。
-   ⚠️ 終端機那份(_modqueue REASON_ZH)的「其他」講得比較長,網頁放不下;兩邊的代碼要一樣(adminwebprobe 比)。 */
+/* 檢舉理由:App 的選單送的是代碼(lib/reportflow 的 REPORT_REASONS),翻回人話。
+   ⚠️ 這是 supabase/functions/_shared/reportreasons.ts 那張表的**逐字雙胞胎**(瀏覽器載不到那個資料夾;第二十八次健檢 藍收成一份＋這一份)——
+      adminwebprobe 逐格比(鍵與字都要一樣),改字要兩邊一起改。🪦 以前終端機那份「其他」講得比較長、信裡一份都沒有。
+   ⚠️ 只翻完全相符的;不認得的原樣印(使用者自己打的字不准被「修飾」過再給審核的人看)。 */
 export const REASON = { harassment: "騷擾或攻擊", fake_account: "假帳號", other: "其他" };
 export const reasonText = (raw) => {
   const s = String(raw ?? "").trim();
@@ -127,6 +128,13 @@ export const LIGHT = {
   invalid: { cls: "dark", word: "沒回太多" }, manual: { cls: "mute", word: "人工判" },
 };
 const pct = (v) => (v == null || Number.isNaN(Number(v)) ? "—" : `${Math.round(Number(v) * 100)}%`);
+/** L4「沒回」那格:按人數的未回率,0204 起括號裡多主揪未回率(第二十八次健檢拍板單 C18)—— 兩個任一 >40% 燈就是「沒回太多」,
+ *  所以兩個都寫出來:只寫按人數的話,燈亮「沒回太多」旁邊卻寫「14% / 40%」,看不出是哪一道擋的(要補催的是主揪)。
+ *  主揪那個數沒有值 → 照舊只寫一個,不寫「主揪 —」(那會像壞了)。沒有值有兩種:伺服器還沒上 0204(metric 裡沒有那一格)、
+ *  窗裡沒有算數的場(「資料不足」:那一格在、值是 null)。🪦 第一版只問「那一格在不在」,資料不足時寫成「—(主揪 —) / 40%」(檢查員抓的)。 */
+const unansText = (m) => (m.host_unanswered_rate != null
+  ? `${pct(m.unanswered_rate)}(主揪 ${pct(m.host_unanswered_rate)}) / 40%`
+  : `${pct(m.unanswered_rate)} / 40%`);
 export function gateRows(gate) {
   return (Array.isArray(gate) ? gate : []).map((g) => {
     const m = g.metric ?? {};
@@ -134,7 +142,7 @@ export function gateRows(gate) {
     const kv = code === "0" ? [["點開邀請", `${m.invite_opened_21d ?? "—"}`], ["註冊", `${m.signups_21d ?? "—"}`]]
       : code === "1" ? [["揪", `${m.sets_21d ?? "—"} 場`], ["主揪", `${m.distinct_hosts ?? "—"} / 3 位`]]
       : code === "2" ? [["有人加入", `${pct(m.established_share)} / 50%`], ["6 小時內", pct(m.within_6h_share)]]
-      : code === "4" ? [["見面率", pct(m.join_to_meet_rate)], ["沒回", `${pct(m.unanswered_rate)} / 40%`]]
+      : code === "4" ? [["見面率", pct(m.join_to_meet_rate)], ["沒回", unansText(m)]]
       : Object.entries(m).map(([k, v]) => [k, String(v)]);
     const l = LIGHT[g.light] ?? { cls: "mute", word: String(g.light ?? "—") };
     return { name: String(g.gate ?? "").replace(/^L\d\s*/, "") || "—", light: g.light, cls: l.cls, word: l.word, kv, rule: g.rule ?? "" };
@@ -239,6 +247,115 @@ export function chatLines(ev) {
   return [...arr(ctx.before).map((m) => line(m, false)), line(ev, true), ...arr(ctx.after).map((m) => line(m, false))];
 }
 export const hasContext = (ev) => Array.isArray(ev?.context?.before) || Array.isArray(ev?.context?.after);
+/** 記事那一列的 body_check(0205;第二十八次健檢收尾)哪幾種值算「伺服器親手確認過,字就是講的那個人說的」。
+ *  五種值與意思只住 0205 的 CHECK 與欄位註解;這裡只分「算對過」與「不算」—— actreportprobe 從 0205 原文讀那五種,
+ *  逐一問這裡,多一種沒分到就紅(不准有一種值兩邊各講各的)。
+ *    quoted 寫進來那一刻原話在、字一樣 ／ own 自己寫的 ／ requoted 0205 從還在的原話重抄 ／ same 0205 對過,本來就一樣。
+ *  不在這裡面的(unchecked、快照裡沒有這一格、認不得的值)一律當「沒對過」—— 往多標那邊倒:
+ *  多標的代價是一行提醒,少標的代價是把手機送的字當成原話。 */
+export const NOTE_BODY_OK = new Set(["quoted", "own", "requoted", "same"]);
+/** 證據是從記事本拍的(submit_report 的記事快照,第二十八次健檢拍板單 C6)→ 後台多畫一行「記事本:◯◯ 存的」要的東西;不是 → null。
+ *  存的人跟講的人不一定是同一個(我存了別人的話):審的人要看得到「這句是誰挑進記事本的」(檢查員退件 1)。
+ *  🪦 第一版還標「存的人就是檢舉人自己」(self)—— 複驗退件 1 拿掉:存的是誰,那一行已經寫了名字。
+ *  name:快照當時的名字(saved_by_name);沒有就問名冊(現在的名字);都沒有＝null(畫面寫「查不到名字」)。
+ *  unchecked:快照裡的 body_check 不在 NOTE_BODY_OK 裡 → 字是存的人那支手機送的、沒有人對上過原話,可能不是原話。
+ *     沒有這一格的快照(0205 之前拍的、或 submit_report 先上而 0205 還沒上)也算 —— 那時候伺服器沒有留「對過」的紀錄。
+ *  🪦 第二版用快照裡的 created_at 判斷(NOTE_QUOTE_SAFE_FROM「09-29 之前存的」那條線):created_at 0205 以前手機可以自己帶,
+ *     往晚填漏標(0149 之前捏造的字被當原話)、往早填讓真話被標 —— 0205 起伺服器在寫進來那一刻(與舊的那批重抄時)記下對過沒有,這裡只讀那一格。
+ *  ⚠️ 值一律原樣(名字不准被「修飾」過再給審核的人看,actSnapRows 同一條)。 */
+export function noteSourceOf(ev, names = {}) {
+  if (!ev || typeof ev !== "object" || ev.source !== "note") return null;
+  const id = typeof ev.saved_by === "string" ? ev.saved_by : null;
+  const then = typeof ev.saved_by_name === "string" && ev.saved_by_name.trim() ? ev.saved_by_name : null;
+  return { id, name: then ?? (id ? names[id] ?? null : null), unchecked: !NOTE_BODY_OK.has(ev.body_check) };
+}
+/** unchecked 那一行的字。⚠️ 寫「沒有對上原話的紀錄」不寫「對不到」:沒有那一格的舊快照是「沒留紀錄」,不一定是對過而對不到。 */
+export const NOTE_UNCHECKED_LINE = "沒有對上原話的紀錄,字可能不是原話";
+/* ── 回憶裡凍住的那一份(第二十八次健檢收尾:回憶頁「那天」的話、照片影片、檔案)──────────────────────
+   submit_report 的 memory_snapshot(形狀住 supabase/functions/_shared/evidence.ts 的 memorySnapshot):形狀照訊息快照,chatLines 照樣畫成一則;
+   多一行講清楚它是哪來的 —— 原本那則訊息已經被結晶刪了,審的人要知道「把這則拿掉」沒有東西可拿(那一顆本來就只看 message_live)。 */
+export const MEM_WORD = { talk: "那天的話", photo: "那天的照片／影片", file: "那天傳的檔案" };
+/** 證據是從回憶頁拍的 → 那一行字;不是 → null。 */
+export function memSourceOf(ev) {
+  if (!ev || typeof ev !== "object" || ev.source !== "memory") return null;
+  return `這一則是從回憶頁拍的(${MEM_WORD[ev.memory_kind] ?? "回憶"}):散場封存時凍住的那一份,原本那則訊息已經不在了`;
+}
+/** 證據區那一行「封印」(0210;第二十八次健檢收尾第五趟複驗要修 B)。R＝admin 的 report 那一發交回來的那一筆。
+ *  true → 不印。false → 紅字:觸發器只在「手機身分寫進來、或手機改過」時蓋 false。
+ *  null／沒有那一格 → 灰字:0210 之前的舊列沒有記號(大多其實是伺服器拍的,只是分不出來),admin 先上、0210 還沒上那段也是。
+ *  讀不到那一列(remove_block 是 lookup_failed)→ 灰字「讀不到」(第六趟複驗建議 3:鈕那邊的那一句只在拿得掉的那幾種才印,檢舉這場揪、訊息已經不在的那幾筆會兩邊都空著)。
+ *  訊息證據與揪快照兩處都畫它(app.js)。用字跟 app.js 的 ERR.evidence_not_sealed 同一個說法「伺服器封過的記號」。
+ *  🪦 第一版只要不是 true 就紅、舊列又全回填成 false —— 0210 之前的每一筆都亮「可能是手機自己寫進來的」,停權前審的人看到的是「證據可能是假的」。 */
+export const SEAL_FALSE_LINE = "這筆證據是手機身分寫進來的(或手機改過),不是伺服器拍的:內容不一定是當時真的樣子";
+export const SEAL_NONE_LINE = "這筆證據沒有伺服器封過的記號(封印上線之前的檢舉都沒有):分不出是不是伺服器拍的";
+export const SEAL_UNREAD_LINE = "讀不到這一筆有沒有伺服器封過的記號,重新整理看看";
+export function sealLineOf(R) {
+  if (!R || typeof R !== "object" || R.evidence_sealed === true) return null;
+  if (R.remove_block === "lookup_failed") return { red: false, text: SEAL_UNREAD_LINE };
+  return R.evidence_sealed === false ? { red: true, text: SEAL_FALSE_LINE } : { red: false, text: SEAL_NONE_LINE };
+}
+/** 回憶那一份的另外幾行(第二十八次健檢收尾,檢查員退件 A2／E2):認不清、已經從回憶拿掉。不是回憶那一份 → []。
+ *  🪦 「檔沒有再拷一份(沿用別筆)」那一行第五趟複驗跟著 files_dup_of 一起拿掉:每一筆自己拷。 */
+export function memNotesOf(ev) {
+  if (!ev || typeof ev !== "object" || ev.source !== "memory") return [];
+  const out = [];
+  if (Number(ev.ambiguous) > 1) out.push(`同一刻他有 ${Number(ev.ambiguous)} 筆,認不清檢舉的是哪一筆 —— 全部拍下來了`);
+  if (typeof ev.memory_removed_at === "string") out.push(`已經從回憶拿掉了(${mdhm(ev.memory_removed_at)})`);
+  return out;
+}
+/** 後台長不長「把這則拿掉」(回憶那一份):是回憶那一份、而且還沒拿掉過。拿不拿得掉的真閘在 admin 函式(memRefOf 只讀伺服器拍的那一份)。 */
+export const memRemovable = (ev) => !!ev && typeof ev === "object" && ev.source === "memory" && typeof ev.memory_removed_at !== "string";
+/* ── 投票卡的選項(第二十八次健檢收尾:拍板單 N3,他 10-26「全部照你建議修吧」)─────────────────────────
+   submit_report 檢舉一張投票卡時,在承諾點之後另拍那張投票(evidence.poll;形狀住 supabase/functions/_shared/evidence.ts 的 pollSnapshot)。
+   🪦 以前證據只有那一則卡片訊息:喬時間／喬地點那一則的 body 是空字串(0134 的 poll_card_body),後台畫出一顆空泡泡;
+      問一題只有題目 —— 選項(使用者自己打的字、自己挑的地點名)一個字都看不到。 */
+export const POLL_KIND = { time: "喬時間", place: "喬地點", ask: "問一題", hand: "舉手" };
+/** 一格選項印成一行字。⚠️ 喬時間的 day／hm 是出題那支手機的**本地字面值**(lib/poll.ts 的 TimeSlot),不換時區、原樣印;
+ *  只有舊形狀(只有 start_at／end_at 的那些格)才是絕對時刻,換成台北時間印。值一律原樣(使用者打的字不准被「修飾」過再給審核的人看)。 */
+export function pollOptText(kind, o) {
+  const s = (x) => (typeof x === "string" && x.trim() ? x : null);
+  if (!o || typeof o !== "object") return "—";
+  if (kind === "ask") return s(o.label) ?? "—";
+  if (kind === "place") return s(o.name) ?? "—";
+  if (kind === "time") {
+    const d = (x) => (s(x) ? x.slice(5) : null);   // "2026-10-26" → "10-26"
+    const local = !!(s(o.day) || s(o.hm));
+    const a = local ? [d(o.day), s(o.hm)].filter(Boolean).join(" ") : (s(o.start_at) ? mdhm(o.start_at) : "");
+    const b = local ? [s(o.day2) && o.day2 !== o.day ? d(o.day2) : null, s(o.hm2)].filter(Boolean).join(" ") : (s(o.end_at) ? mdhm(o.end_at) : "");
+    return a ? (b ? `${a} – ${b}` : a) : "—";
+  }
+  return s(o.label) ?? s(o.name) ?? "—";
+}
+/** 證據是一張投票卡 → 投票那一塊要畫的東西;不是投票卡 → null。
+ *  回 { kind, title, opts:[{ text, landed }], who }(拍到了)/ { error }(沒拍到,原因原樣)/ { missing: true }(這一筆是選項進證據之前送的)。
+ *  who:這些字是誰寫的。⚠️ 講話的人(卡片的寄件人＝出題的人)跟選項的作者不一定是同一個:貼出來之後**出題的人或主揪**都改得動題目與選項
+ *     (0134 activity_polls_update;0192 對其他人丟 42501),而表上沒有記「哪一格是誰改的」—— 沒改過才說得出「都是出題的人寫的」;
+ *     改過、主揪又是另一個人,就照實寫「分不出」,兩個名字都給(不替沒有的資料下結論)。
+ *  names:admin_report 回的名冊(現在的名字);act:admin_report 的 activity(現在的主揪)。快照裡凍住的名字優先(當時叫什麼)。 */
+export function pollSnapOf(ev, names = {}, act = null) {
+  if (!ev || typeof ev !== "object" || ev.kind !== "poll") return null;
+  if (typeof ev.poll_error === "string" && ev.poll_error) return { error: ev.poll_error };
+  const p = ev.poll;
+  if (!p || typeof p !== "object") return { missing: true };
+  const s = (x) => (typeof x === "string" && x.trim() ? x : null);
+  const creator = s(p.created_by);
+  const hostId = s(p.host_id) ?? s(act?.host_id);
+  const cName = s(p.created_by_name) ?? (creator ? names[creator] ?? null : null) ?? "(查不到名字)";
+  const hName = s(p.host_name) ?? (hostId ? names[hostId] ?? null : null) ?? s(act?.host_name) ?? "(查不到名字)";
+  const edited = s(p.edited_at);
+  const who = !edited
+    ? (creator ? `題目和選項都是 ${cName} 寫的(貼出來之後沒改過)` : "題目和選項都是出題的人寫的(貼出來之後沒改過;他後來刪了帳號)")
+    : creator && hostId && creator === hostId
+      ? `${cName} 出的題,${mdhm(edited)} 改過 —— 他就是主揪,改得動的只有他`
+      : `${creator ? cName : "出題的人(後來刪了帳號)"} 出的題,${mdhm(edited)} 改過 —— 出題的人跟主揪(${hName})都改得動,分不出哪一格是誰寫的`;
+  const opts = (Array.isArray(p.opts) ? p.opts : []).map((o) => ({ text: pollOptText(p.kind, o), landed: !!s(p.landed) && o?.id === p.landed }));
+  return { kind: POLL_KIND[p.kind] ?? String(p.kind ?? ""), title: s(p.title) ?? "", opts, who };
+}
+/** 投票那一塊印在卡片那一則的泡泡裡的字(一行一格;拍板的那一格標出來)。 */
+export function pollBubbleText(pv) {
+  if (!pv || !Array.isArray(pv.opts)) return "";
+  return [pv.title, ...pv.opts.map((o) => `・${o.text}${o.landed ? "(拍板)" : ""}`)].filter(Boolean).join("\n");
+}
 /** 揪的快照(第二十五次健檢 K183;submit_report 在檢舉那一刻拍的)→ 後台那一塊要列的幾行 [欄名, 值]。
  *  不是揪的快照(訊息證據、沒有快照)回 null —— 畫面據此決定走這一塊還是對話那一塊(evidenceView)。
  *  ⚠️ 值一律原樣(主揪自己打的字不准被「修飾」過再給審核的人看,reasonText 同一條);空的那幾格不列。

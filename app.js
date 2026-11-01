@@ -14,7 +14,7 @@ import { SUPABASE_URL, PUBLISHABLE_KEY } from "./config.js";
 import * as Auth from "./auth.js";
 import {
   reasonText, KIND, BAN_CHOICES, actSnapRows, shortenText, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
-  growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, matchFiles, qrDataUrl,
+  growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, noteSourceOf, NOTE_UNCHECKED_LINE, sealLineOf, memSourceOf, memNotesOf, memRemovable, pollSnapOf, pollBubbleText, matchFiles, qrDataUrl,
   regCounts, actGauge, niceScale,
 } from "./logic.js";
 
@@ -62,6 +62,14 @@ const personTag = (p) => p?.gone ? stTag("mute", "已刪帳號")
 const ERR = {
   empty_note: "要寫一句理由", bad_days: "要選停多久", bad_id: "這一筆找不到了,重新整理看看", not_found: "這一筆找不到了",
   not_a_message_report: "這筆檢舉不是針對某一則訊息", not_targets_message: "那則訊息不是被檢舉的人傳的,不能從這裡拿掉",
+  /* 「把這則拿掉」的那道閘(_shared/admin.ts 的 removeGate;0210 的封印、證據櫃的檔)—— 第二十八次健檢收尾複驗 */
+  /* ⚠️ 不寫「不是伺服器拍的」(第四輪複驗要修 3):evidence 是 0096 才有的,那時 App 早就走 submit_report —— 舊列的證據大多其實是伺服器拍的,
+     只是 0210 之前沒有留記號;admin 先上、0210 還沒上的那段時間,每一筆都沒有那一格。照實講「沒有記號」。 */
+  evidence_not_sealed: "這筆證據沒有伺服器封過的記號,不能從這裡拿掉(看證據、看過了、停權照舊)",
+  evidence_missing: "這筆檢舉沒有拍到證據,不能從這裡拿掉(拿掉就連一份紀錄都沒有了)",
+  evidence_files_incomplete: "證據櫃裡的檔沒拷全,不能從這裡拿掉(拿掉了原檔和證據就都沒了)",
+  evidence_files_missing: "證據櫃裡沒有那個檔,不能從這裡拿掉(拿掉了原檔和證據就都沒了)",
+  not_a_memory_report: "這筆檢舉不是針對回憶裡的一則", lookup_failed: "讀不到這一筆,再試一次",
   failed: "伺服器出錯了,再試一次", gate_failed: "伺服器出錯了,再試一次",
 };
 function errText(data, status) {
@@ -575,7 +583,7 @@ function signupBars(ov) {
 }
 /* 每週的揪:成對細條(他 10-09 從三種挑的乙)—— 淺＝開的揪、深＝見到面,兩根並排、同一把尺。
    ⚠️ 不准相減、不准畫成一根裝在另一根裡:sets 照「開的那週」(created_at)、met 照「出發那週」(start_at)算
-      (0063_analytics_v2.sql:161、178),不是同一批揪 ——「開了、沒見到面」算不出來,某一週見到面可以比開的多。
+      (analytics.v_weekly 的 new_sets 與 meets_confirmed;現行版在 0202,見面那格從 v_meet_sets 數),不是同一批揪 ——「開了、沒見到面」算不出來,某一週見到面可以比開的多。
       第四輪樣品第一版就畫了那個差(斜線區間帶),adminwebprobe §5 釘著。 */
 function setsCard(ov) {
   const w = ov.weeks ?? [], n = w.length;
@@ -672,9 +680,16 @@ function detailPane() {
   }
   const acts = el("div", "acts");
   const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.shorten = null; S.noteDraft = ""; S.actErr = null; render(); }; return b; };
+  /* 「把這則拿掉」長不長:先看那一則還能不能拿(房裡的還在／回憶那一份還沒拿掉),再看伺服器那道閘(R.remove_block,_shared/admin.ts 的 removeGate);
+     擋下的就不長鈕、照實寫一句(第二十八次健檢收尾複驗:手機寫得進來的證據不准拿來刪別人的話)。停權照舊。 */
+  const canMsg = r.target_type === "message" && r.message_live, canMem = memRemovable(R?.evidence);
+  const block = (canMsg || canMem) && R && !R.error ? R.remove_block ?? null : null;
   put(acts, mk("看過了", "solid", "handle"), mk("停權", "danger", "ban"),
-    r.target_type === "message" && r.message_live ? mk("把這則拿掉", "line", "remove") : null);
+    canMsg && !block ? mk("把這則拿掉", "line", "remove") : null,
+    /* 回憶裡凍住的那一份(第二十八次健檢收尾,檢查員退件 E2):同一個樣子的鈕;拿掉的是大家回憶裡那一份,證據櫃留著 */
+    canMem && !block ? mk("把這則拿掉", "line", "remove_memory") : null);
   pane.append(acts);
+  if (block) pane.append(el("div", "done mute", ERR[block] ?? block));
   if (S.ask) pane.append(askBox(S.ask, r));
   if (S.actErr) pane.append(el("div", "done red", S.actErr));
   return pane;
@@ -684,14 +699,20 @@ function detailPane() {
 function actSnapView(R) {
   const kv = el("dl", "kv");
   for (const [k, v] of actSnapRows(R.evidence, R.names)) put(kv, el("dt", null, k), el("dd", null, v));
-  return [put(el("div", "evwrap"), put(el("div", "evtools"), el("span", "evh", "證據 · 檢舉當下那一場")), kv)];
+  /* 揪快照一樣是手機寫得進來的那一格(第五趟複驗建議):封印那一行跟訊息證據同一支 sealLineOf */
+  const seal = sealLineOf(R);
+  return [put(el("div", "evwrap"), put(el("div", "evtools"), el("span", "evh", "證據 · 檢舉當下那一場")), kv,
+    seal ? el("div", seal.red ? "done red" : "done mute", seal.text) : null)];
 }
-const MEDIA_WORD = { photo: "照片", image: "照片", video: "影片", voice: "語音", audio: "語音", file: "檔案" };
+/* poll:投票卡那一則(第二十八次健檢收尾 N3)—— 喬時間／喬地點那一則的 body 是空字串,前後文裡的投票卡至少印「(投票)」,不是一顆空泡泡 */
+const MEDIA_WORD = { photo: "照片", image: "照片", video: "影片", voice: "語音", audio: "語音", file: "檔案", poll: "投票" };
 function evidenceView(R, r) {
   const ev = R.evidence;
   const lines = chatLines(ev);
   const { byLine, loose } = matchFiles(lines, R.files);
   const names = R.names ?? {};
+  /* 投票卡的選項(第二十八次健檢收尾 N3):拍到了就印進卡片那一則的泡泡(在霧裡,跟對話同一層隱私);誰寫的、沒拍到的原因印在底下(判斷住 logic.js 的 pollSnapOf) */
+  const pv = pollSnapOf(ev, names, R.activity);
   const box = el("div", "evwrap" + (S.fog ? " fog" : ""));
   /* 霧用切 class,不整頁重畫 —— 重畫會換掉節點,模糊散開的過場就被吃掉了 */
   const tg = el("button", "btn sm", S.fog ? "看清楚" : "霧回去"); tg.dataset.k = "fog";
@@ -706,7 +727,10 @@ function evidenceView(R, r) {
     const f = byLine.get(i);
     if (f) bb.append(fileNode(f, false));
     else if (l.media) bb.append(el("span", "note", `(${MEDIA_WORD[l.kind] ?? "檔案"},檔已經不在了)`));
-    if (l.body) bb.append(document.createTextNode(l.body));
+    if (l.anchor && pv?.opts) {
+      /* 那張投票:題型、題目、每一格(拍板的那一格標出來)。卡片 body 只是退化顯示(問一題＝題目、喬時間／喬地點＝空字串),不另印 */
+      bb.append(el("span", "note", `(投票 · ${pv.kind})`), document.createTextNode("\n" + pollBubbleText(pv)));
+    } else if (l.body) bb.append(document.createTextNode(l.body));
     else if (!l.media) bb.append(el("span", "note", MEDIA_WORD[l.kind] ? `(${MEDIA_WORD[l.kind]})` : ""));
     put(m, el("span", "by", names[l.sender] ?? "(查不到名字)"), bb, el("span", "tm", hm(l.at)));
     chat.append(m);
@@ -715,6 +739,20 @@ function evidenceView(R, r) {
   if (lz) { loose.forEach((f) => lz.append(fileNode(f, true))); box.append(lz); }
   fogged();
   const errs = [];
+  /* 從記事本拍的那一種(第二十八次健檢拍板單 C6):誰把這句挑進記事本的;沒有對上原話的紀錄(0205 的 body_check),多一行「字可能不是原話」(判斷住 logic.js 的 noteSourceOf) */
+  const src = noteSourceOf(ev, names);
+  if (src) errs.push(el("div", "done mute", `這句是從記事本拍的:${src.name ?? "(查不到名字)"} 存的`));
+  if (src?.unchecked) errs.push(el("div", "done mute", NOTE_UNCHECKED_LINE));
+  /* 封印那一行(0210):停權之前審的人也要看得到 —— 哪一種印哪一句住 logic.js 的 sealLineOf(揪快照那一份也畫它) */
+  const seal = sealLineOf(R);
+  if (seal) errs.push(el("div", seal.red ? "done red" : "done mute", seal.text));
+  /* 從回憶頁拍的那一種(第二十八次健檢收尾):原本那則訊息已經不在了(判斷住 logic.js 的 memSourceOf) */
+  const memLine = memSourceOf(ev);
+  if (memLine) errs.push(el("div", "done mute", memLine));
+  for (const line of memNotesOf(ev)) errs.push(el("div", "done mute", line));
+  if (pv?.who) errs.push(el("div", "done mute", pv.who));
+  if (pv?.error) errs.push(el("div", "done mute", "投票的選項沒拍到:" + pv.error));
+  if (pv?.missing) errs.push(el("div", "done mute", "投票的選項沒存到:這一筆是選項進證據之前檢舉的,只有卡片那一則"));
   if (ev.files_error) errs.push(el("div", "done mute", "有檔沒拷到:" + ev.files_error));
   if (ev.context_error) errs.push(el("div", "done mute", "前後文沒存到:" + ev.context_error));
   return [box, ...errs];
@@ -790,6 +828,15 @@ function askBox(key, r) {
       put(box, el("p", "q", shortenText(S.shorten.current, c?.label ?? "")), put(el("div", "row"), y, n));
     }
     check();
+  } else if (key === "remove_memory") {
+    const g = el("button", "btn danger", "拿掉"), no = el("button", "btn", "先不要");
+    no.onclick = () => { S.ask = null; render(); };
+    g.onclick = () => act(g, async () => {
+      /* 「拿掉了」那一筆記號是承諾點之後在背景寫的(admin 函式的 admin_memory_mark):重讀得太快,鈕可能還在 —— 再按一次回 already,不會刪第二次 */
+      await api("remove_memory", { id });
+      await loadReport(id, true);
+    });
+    put(box, el("p", "q", "從大家的回憶拿掉這則?"), put(el("div", "row"), g, no));
   } else {
     const g = el("button", "btn danger", "拿掉"), no = el("button", "btn", "先不要");
     no.onclick = () => { S.ask = null; render(); };
