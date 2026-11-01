@@ -304,6 +304,10 @@ export function memNotesOf(ev) {
   return out;
 }
 /** 後台長不長「把這則拿掉」(回憶那一份):是回憶那一份、而且還沒拿掉過。拿不拿得掉的真閘在 admin 函式(memRefOf 只讀伺服器拍的那一份)。 */
+/* 這一筆長不長「停權」鈕(第三十次健檢卡 8):被檢舉的人已經不在了就沒有對象。
+   兩種「不在」:0155 之後留空殼(deleted_at 有值);0211 起那一列真的被刪時 target_id 變空(on delete set null)——
+   後者按下去,admin_ban 只會回「找不到這筆檢舉」(講錯理由)。target_gone 由 admin_report_row 算,兩種都認得。 */
+export const canBan = (r) => !!r && !r.target_gone && typeof r.target_id === "string" && r.target_id !== "";
 export const memRemovable = (ev) => !!ev && typeof ev === "object" && ev.source === "memory" && typeof ev.memory_removed_at !== "string";
 /* ── 投票卡的選項(第二十八次健檢收尾:拍板單 N3,他 10-26「全部照你建議修吧」)─────────────────────────
    submit_report 檢舉一張投票卡時,在承諾點之後另拍那張投票(evidence.poll;形狀住 supabase/functions/_shared/evidence.ts 的 pollSnapshot)。

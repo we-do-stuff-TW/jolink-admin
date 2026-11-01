@@ -14,7 +14,7 @@ import { SUPABASE_URL, PUBLISHABLE_KEY } from "./config.js";
 import * as Auth from "./auth.js";
 import {
   reasonText, KIND, BAN_CHOICES, actSnapRows, shortenText, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
-  growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, noteSourceOf, NOTE_UNCHECKED_LINE, sealLineOf, memSourceOf, memNotesOf, memRemovable, pollSnapOf, pollBubbleText, matchFiles, qrDataUrl,
+  growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, noteSourceOf, NOTE_UNCHECKED_LINE, sealLineOf, memSourceOf, memNotesOf, memRemovable, canBan, pollSnapOf, pollBubbleText, matchFiles, qrDataUrl,
   regCounts, actGauge, niceScale,
 } from "./logic.js";
 
@@ -684,7 +684,7 @@ function detailPane() {
      擋下的就不長鈕、照實寫一句(第二十八次健檢收尾複驗:手機寫得進來的證據不准拿來刪別人的話)。停權照舊。 */
   const canMsg = r.target_type === "message" && r.message_live, canMem = memRemovable(R?.evidence);
   const block = (canMsg || canMem) && R && !R.error ? R.remove_block ?? null : null;
-  put(acts, mk("看過了", "solid", "handle"), mk("停權", "danger", "ban"),
+  put(acts, mk("看過了", "solid", "handle"), canBan(r) ? mk("停權", "danger", "ban") : null,
     canMsg && !block ? mk("把這則拿掉", "line", "remove") : null,
     /* 回憶裡凍住的那一份(第二十八次健檢收尾,檢查員退件 E2):同一個樣子的鈕;拿掉的是大家回憶裡那一份,證據櫃留著 */
     canMem && !block ? mk("把這則拿掉", "line", "remove_memory") : null);
