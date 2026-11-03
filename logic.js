@@ -67,6 +67,7 @@ export function waited(hours) {
   return `${Math.floor(h / 24)} 天${h % 24 ? ` ${h % 24} 小時` : ""}`;
 }
 
+/** ⚠️ supabase/functions/_shared/planusage.ts 有一份逐字的雙胞胎(週報那幾行用;那邊載不到這一頁)。改這裡要一起改,quotaprobe §B 拿同一串數字比兩邊。 */
 export function fmtBytes(n) {
   const b = Number(n) || 0;
   if (b < 1024) return `${b} B`;
@@ -74,6 +75,34 @@ export function fmtBytes(n) {
   let v = b / 1024, i = 0;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
+}
+
+/* ── 額度:資料庫與倉庫用到哪了(0215 的 plan_usage;第三十次健檢卡 10)────────────
+   系統頁那兩行與鈴鐺都從這一支拿(同一份 level → 燈、字)。⚠️ 不在這裡判門檻:用了多少算「快滿了」是資料庫說的(level),
+   這裡只把 level 翻成燈與字。usage 是 null(0215 還沒上、或 plan_usage 問不到)→ 一行都不畫(不畫成「正常」—— 那會是一句假話)。 */
+export const USAGE_NAME = { db: "資料庫", storage: "倉庫" };   // 週報叫同一個名字(_shared/planusage.ts 的 USAGE_NAME)
+const USAGE_LOOK = {
+  ok: { light: "green", word: "正常" },
+  warn: { light: "yellow", word: "快滿了" },
+  full: { light: "red", word: "滿了" },
+};
+export function usageRows(u) {
+  if (!u || typeof u !== "object") return [];
+  const out = [];
+  for (const k of ["db", "storage"]) {
+    const c = u[k];
+    if (!c || typeof c !== "object") continue;
+    const look = USAGE_LOOK[c.level] ?? { light: "manual", word: "算不出來" };
+    const nm = USAGE_NAME[k];
+    const known = c.level in USAGE_LOOK;
+    out.push({
+      k, nm, level: c.level, light: look.light, word: look.word,
+      kv: known ? [["用了", `${fmtBytes(c.used)}(${c.pct}%)`], ["上限", fmtBytes(c.limit)]] : [["上限", c.limit ? fmtBytes(c.limit) : "沒設"]],
+      bell: c.level === "full" ? `${nm}滿了` : `${nm}用到 ${c.pct}%`,
+      span: `${fmtBytes(c.used)} / ${fmtBytes(c.limit)}`,
+    });
+  }
+  return out;
 }
 
 /* ── 鈴鐺:要處理的事 ────────────────────────────────────────────────
@@ -107,6 +136,10 @@ export function bellItems(b) {
   }
   if (b.patrol_stale === true) {
     out.push({ dot: "red", text: "巡邏停了", sub: b.patrol_scanned_at ? `上次 ${mdhm(b.patrol_scanned_at)}` : "還沒跑過", go: { view: "system" } });
+  }
+  /* 0215(第三十次健檢卡 10):資料庫、倉庫過了警告線(warn)或滿了(full)。上限與警告線只住資料庫的 plan_usage,這裡只照 level 畫。 */
+  for (const r of usageRows(b.usage)) {
+    if (r.level === "warn" || r.level === "full") out.push({ dot: r.light, text: r.bell, sub: r.span, go: { view: "system" } });
   }
   if (n(b.not_updated) > 0 && b.latest_build != null) {
     out.push({ dot: "manual", text: `${b.not_updated} 人還沒更新到 build ${b.latest_build}`,
@@ -309,6 +342,19 @@ export function memNotesOf(ev) {
    後者按下去,admin_ban 只會回「找不到這筆檢舉」(講錯理由)。target_gone 由 admin_report_row 算,兩種都認得。 */
 export const canBan = (r) => !!r && !r.target_gone && typeof r.target_id === "string" && r.target_id !== "";
 export const memRemovable = (ev) => !!ev && typeof ev === "object" && ev.source === "memory" && typeof ev.memory_removed_at !== "string";
+/* ── 拿掉他的…(第三十次健檢卡 9;0214)───────────────────────────────────────────
+   admin 函式「report」那一發多交一格 profile:他**現在**有、拿得掉的幾樣(順序照伺服器的 PROFILE_ITEMS;判斷住
+   supabase/functions/_shared/profileremove.ts 的 profileOffer —— 已經是沒取名的標題不列、不是他開的那一場不列)。
+   ⚠️ 鍵＝那邊的 PROFILE_ITEMS(adminprobe §9 對兩邊;多一樣少一樣都紅)。 */
+export const PROFILE_LABEL = { avatar: "頭貼", cover: "封面", bio: "簡介", title: "揪的標題" };
+/** 長不長「拿掉他的…」:這一筆的對象還在(同 canBan)、伺服器交了至少一樣、每一樣都認得。 */
+export const canRemoveProfile = (r, R) => canBan(r) && Array.isArray(R?.profile) && R.profile.length > 0
+  && R.profile.every((p) => p && Object.hasOwn(PROFILE_LABEL, p.k));
+/** 拿掉之後原地那一行。removed＝伺服器說**真的**改了的那幾樣(已經是空的不算);一樣都沒改＝早就不在了(另一個分頁先拿了)。 */
+export function profileDoneText(removed, note) {
+  const ks = Array.isArray(removed) ? removed.filter((k) => Object.hasOwn(PROFILE_LABEL, k)) : [];
+  return ks.length ? `拿掉了${ks.map((k) => PROFILE_LABEL[k]).join("、")}:「${note}」` : `那幾樣早就不在了:「${note}」`;
+}
 /* ── 投票卡的選項(第二十八次健檢收尾:拍板單 N3,他 10-26「全部照你建議修吧」)─────────────────────────
    submit_report 檢舉一張投票卡時,在承諾點之後另拍那張投票(evidence.poll;形狀住 supabase/functions/_shared/evidence.ts 的 pollSnapshot)。
    🪦 以前證據只有那一則卡片訊息:喬時間／喬地點那一則的 body 是空字串(0134 的 poll_card_body),後台畫出一顆空泡泡;

@@ -16,7 +16,10 @@ import {
   reasonText, KIND, BAN_CHOICES, actSnapRows, shortenText, md, hm, mdhm, waited, fmtBytes, bellItems, gateRows, netNew, weekPair, deltaText,
   growthSeries, buildNum, isOld, peopleFilters, matchName, chatLines, hasContext, noteSourceOf, NOTE_UNCHECKED_LINE, sealLineOf, memSourceOf, memNotesOf, memRemovable, canBan, pollSnapOf, pollBubbleText, matchFiles, qrDataUrl,
   regCounts, actGauge, niceScale,
+  PROFILE_LABEL, canRemoveProfile, profileDoneText,
 } from "./logic.js";
+/* 第三十次健檢卡 10(0215):額度那兩行。另起一行 import(上面那串別的輪也在加,擠在同一行容易互相蓋掉)。 */
+import { usageRows } from "./logic.js";
 
 /* 被嵌進別人的頁面就什麼都不畫:點擊劫持(把按鈕疊在一個看起來無害的頁面底下騙你按)。
    GitHub Pages 送不了 frame-ancestors／X-Frame-Options,只能在這裡擋。 */
@@ -32,6 +35,7 @@ const S = {
   auth: "boot", loginErr: null, factor: null, enroll: null, me: null,
   view: "overview", bell: false, asof: null,
   rtab: "open", sel: null, rdetail: false, fog: true, ask: null, days: null, busy: false, shorten: null, noteDraft: "",
+  pick: [], pdone: {},   // 「拿掉他的…」勾了哪幾樣、拿掉之後原地那一行(第三十次健檢卡 9)
   q: "", pf: "all", drawer: null,
   done: {}, err: {}, actErr: null, loading: false,
 };
@@ -70,6 +74,7 @@ const ERR = {
   evidence_files_incomplete: "證據櫃裡的檔沒拷全,不能從這裡拿掉(拿掉了原檔和證據就都沒了)",
   evidence_files_missing: "證據櫃裡沒有那個檔,不能從這裡拿掉(拿掉了原檔和證據就都沒了)",
   not_a_memory_report: "這筆檢舉不是針對回憶裡的一則", lookup_failed: "讀不到這一筆,再試一次",
+  bad_items: "要選拿掉哪幾樣",   // 「拿掉他的…」(第三十次健檢卡 9):資料庫那幾道閘的話由 detail 帶回來(errText 先印它)
   failed: "伺服器出錯了,再試一次", gate_failed: "伺服器出錯了,再試一次",
 };
 function errText(data, status) {
@@ -169,7 +174,7 @@ async function loadAll(force = false) {
 }
 async function refresh() {
   D.report = {}; D.person = {};
-  S.done = {}; S.actErr = null;
+  S.done = {}; S.pdone = {}; S.actErr = null;
   /* 頂帶那顆重新整理的圖示在讀的時候轉(按了有反應;成功就安靜地停,不出提示條) */
   S.loading = true; render();
   try { await Promise.all([loadBell(), loadView(S.view, true)]); } finally { S.loading = false; render(); }
@@ -679,7 +684,7 @@ function detailPane() {
     return pane;
   }
   const acts = el("div", "acts");
-  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.shorten = null; S.noteDraft = ""; S.actErr = null; render(); }; return b; };
+  const mk = (label, cls, key) => { const b = el("button", "btn " + cls, label); b.dataset.k = "ask-" + key; b.setAttribute("aria-expanded", String(S.ask === key)); b.onclick = () => { S.ask = S.ask === key ? null : key; S.days = null; S.shorten = null; S.pick = []; S.noteDraft = ""; S.actErr = null; render(); }; return b; };
   /* 「把這則拿掉」長不長:先看那一則還能不能拿(房裡的還在／回憶那一份還沒拿掉),再看伺服器那道閘(R.remove_block,_shared/admin.ts 的 removeGate);
      擋下的就不長鈕、照實寫一句(第二十八次健檢收尾複驗:手機寫得進來的證據不准拿來刪別人的話)。停權照舊。 */
   const canMsg = r.target_type === "message" && r.message_live, canMem = memRemovable(R?.evidence);
@@ -687,8 +692,11 @@ function detailPane() {
   put(acts, mk("看過了", "solid", "handle"), canBan(r) ? mk("停權", "danger", "ban") : null,
     canMsg && !block ? mk("把這則拿掉", "line", "remove") : null,
     /* 回憶裡凍住的那一份(第二十八次健檢收尾,檢查員退件 E2):同一個樣子的鈕;拿掉的是大家回憶裡那一份,證據櫃留著 */
-    canMem && !block ? mk("把這則拿掉", "line", "remove_memory") : null);
+    canMem && !block ? mk("把這則拿掉", "line", "remove_memory") : null,
+    /* 拿掉他的頭貼／封面／簡介／他開的那一場的標題(第三十次健檢卡 9,0214):伺服器交了他現在有的幾樣才長(判斷住 logic.js 的 canRemoveProfile) */
+    canRemoveProfile(r, R) ? mk("拿掉他的…", "line", "profile") : null);
   pane.append(acts);
+  if (S.pdone[S.sel]) pane.append(el("div", "done red", S.pdone[S.sel].text));
   if (block) pane.append(el("div", "done mute", ERR[block] ?? block));
   if (S.ask) pane.append(askBox(S.ask, r));
   if (S.actErr) pane.append(el("div", "done red", S.actErr));
@@ -782,7 +790,7 @@ function askBox(key, r) {
     catch (e) { if (!(e instanceof Stop)) S.actErr = e.message; }
     finally { S.busy = false; }
     render();
-    say(S.actErr || S.done[id]?.text || "");
+    say(S.actErr || S.done[id]?.text || S.pdone[id]?.text || "");
   };
   if (key === "handle") {
     const g = el("button", "btn solid", "確定"); g.disabled = !note.value.trim(); note.oninput = () => { keep(); g.disabled = !note.value.trim(); };
@@ -837,6 +845,42 @@ function askBox(key, r) {
       await loadReport(id, true);
     });
     put(box, el("p", "q", "從大家的回憶拿掉這則?"), put(el("div", "row"), g, no));
+  } else if (key === "profile") {
+    /* 拿掉他的…(第三十次健檢卡 9,0214):他現在有的那幾樣各一列 —— 一顆可以按下去的膠囊(停權天數那一種)＋他現在的樣子
+       (頭貼、封面的小圖;簡介、標題的字)。勾幾樣、寫理由、按「拿掉」。勾的那幾樣與理由都要有,鈕才按得下去。
+       對誰、哪一場由伺服器從這筆檢舉認(網頁只送 target 給它核對);拿掉之後重讀這一筆,拿掉的那幾樣就不在清單上了。 */
+    const items = D.report[id]?.profile ?? [];
+    /* 問句帶上對象(驗收員 #18:確認框要看得出是對誰)。那排膠囊是一組(讀屏聽得到「拿掉○○的哪幾樣」,不只「頭貼,切換鈕」) */
+    const q = el("p", "q", `拿掉${r.target_name ?? "他"}的哪幾樣`); q.id = "pick-q";
+    const list = el("div", "pick"); list.setAttribute("role", "group"); list.setAttribute("aria-labelledby", "pick-q");
+    const g = el("button", "btn danger", "拿掉"); g.dataset.k = "profile-go";
+    /* S.busy 也要算:送出途中再按膠囊或打字,不准把「拿掉」重新點亮(重送有 S.busy 擋,但畫面上不該看起來按得下去) */
+    const check = () => { g.disabled = S.busy || !S.pick.length || !note.value.trim(); };
+    for (const p of items) {
+      const b = el("button", "chipbtn", PROFILE_LABEL[p.k] ?? p.k); b.dataset.k = "pick-" + p.k; b.setAttribute("aria-pressed", String(S.pick.includes(p.k)));
+      b.onclick = () => { S.pick = S.pick.includes(p.k) ? S.pick.filter((x) => x !== p.k) : [...S.pick, p.k]; b.setAttribute("aria-pressed", String(S.pick.includes(p.k))); check(); };
+      let pv;
+      if (p.k === "avatar" || p.k === "cover") {
+        if (p.img) {
+          pv = el("img", p.k === "avatar" ? "av" : "cv"); pv.alt = p.k === "avatar" ? "他現在的頭貼" : "他現在的封面";
+          pv.referrerPolicy = "no-referrer"; pv.loading = "lazy";
+          /* 限時網址 600 秒就過期(admin 函式的 SIGN_SECONDS)、檔也可能已經被刪:載不出來就換成那一句,不留一張破圖 */
+          const img = pv; img.onerror = () => img.replaceWith(el("span", "pv", "(讀不到圖)"));
+          img.src = p.img;
+        } else pv = el("span", "pv", "(讀不到圖)");
+      } else pv = el("span", "pv", `「${p.text ?? ""}」`);
+      put(list, b, pv);
+    }
+    note.oninput = () => { keep(); check(); };   // 理由的草稿怎麼留,見 askBox 開頭那段
+    g.onclick = () => act(g, async () => {
+      const t = note.value.trim();
+      const res = await api("remove_profile", { id, target: r.target_id, what: S.pick, note: t });
+      S.pdone[id] = { text: profileDoneText(res?.removed, t) };
+      S.pick = [];
+      await loadReport(id, true);
+    });
+    put(box, q, list, put(el("div", "row"), note, g));
+    check();
   } else {
     const g = el("button", "btn danger", "拿掉"), no = el("button", "btn", "先不要");
     no.onclick = () => { S.ask = null; render(); };
@@ -990,6 +1034,8 @@ function system() {
      ["巡邏", nf.patrol_scanned_at ? mdhm(nf.patrol_scanned_at) : "沒跑過"]]);
   const q = s.quota ?? {};
   line("限流帳本", "manual", null, [["24 小時記了", `${q.hits ?? 0} 次`], ["人", String(q.users ?? 0)]]);
+  /* 0215(第三十次健檢卡 10):免費額度。燈與字由 logic.js 的 usageRows 照資料庫給的 level 翻(門檻只住 plan_usage);0215 還沒上＝一行都不畫。 */
+  usageRows(s.usage).forEach((r) => line(r.nm, r.light, r.word, r.kv));
   out.push(card("", "狀態", null, box));
 
   const b = s.builds ?? {};
@@ -1010,7 +1056,9 @@ function system() {
   const bd = el("div", "blind");
   [["最近一次打開 App", " 沒在記。「最近有動作」是開揪、加入、按過東西的時間。"],
    ["聊天", " 散場 48 小時後清掉,只剩結晶那一刻記的句數。"],
-   ["閃退", " 在 Sentry,這裡沒有。"]].forEach(([b1, t]) => bd.append(put(el("p"), el("b", null, b1), document.createTextNode(t))));
+   ["閃退", " 在 Sentry,這裡沒有。"],
+   /* 0215(第三十次健檢卡 10):這兩個數資料庫裡沒有(週報那一句是 _shared/planusage.ts 的 NOT_IN_DB,同一件事) */
+   ["本月函式叫用次數、即時連線尖峰", " 資料庫裡沒查到出處,看 Supabase 後台 → Usage。"]].forEach(([b1, t]) => bd.append(put(el("p"), el("b", null, b1), document.createTextNode(t))));
   out.push(card("blindc", "看不到的", null, bd));
   return out;
 }
